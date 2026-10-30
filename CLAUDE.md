@@ -22,6 +22,8 @@ Module path: `github.com/jameswoolfenden/picard`
   since advisories describe vulnerabilities and a refusal is possible)
 - `triage.go` - evidence -> per-advisory and per-package Verdict
 - `report.go` - table, JSON and OpenVEX output
+- `surface.go`, `surface_scan.go` - `picard surface`: what each direct dependency alone
+  brings in (packages, native code, size, advisory history, use) and undeclared imports
 - `scan.go` - wires it together
 
 ## Working in this repo

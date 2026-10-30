@@ -103,6 +103,45 @@ setuptools 84.0.0: preconditions don't hold here: The path escape depends on Win
 drive-qualified absolute path semantics ... This deployment runs only on Linux ...
 ```
 
+## Surface: what each dependency costs
+
+Triage makes alerts cheaper; `picard surface` is for having fewer of them. For each direct
+dependency it works out what would leave the production install if it were removed - its
+own transitive packages, with native code, wheel size for the target platform, and every
+advisory those packages have ever had - against how much of it the project uses.
+
+```shell
+picard surface -d .                         # table, biggest first
+picard surface -d . --coverage coverage.json --detail
+picard surface -d . --format json
+```
+
+pan, with its test coverage:
+
+```text
+pan ships 88 packages (linux x86_64, Python 3.12). What each direct dependency alone brings in:
+
+DEPENDENCY                      PACKAGES  NATIVE  SIZE        PAST ADVISORIES  NAMES USED   FUNCTIONS CALLED
+sentence-transformers (+torch)  26        6       >= 35.5 MB  178              2            1748
+librosa                         12        5       65.0 MB     3                1            6
+anthropic                       8         1       2.5 MB      16               1            13
+uvicorn                         5         4       5.9 MB      8                0 + command  0
+...
+undeclared: the code imports httpx (package httpx) without depending on it - it's only
+there via sentence-transformers → huggingface-hub → httpx, so removing that breaks it
+```
+
+- **Groups** - a direct dependency only another one needs goes with it: pan lists torch
+  directly, but it's only there for sentence-transformers, so they're costed together.
+- **Extras** count: `uvicorn[standard]`'s uvloop, httptools, watchfiles and websockets are
+  attributed to uvicorn.
+- **Used** is names imported from it, plus whether one of its console commands appears in
+  the Dockerfile/Makefile/compose file (uvicorn is run, not imported).
+- **Undeclared** imports - code importing a package it doesn't depend on - are flagged,
+  because they're exactly what breaks when you remove the dependency that happened to
+  provide them.
+- Sizes from indexes that don't publish them (PyTorch's) show as `>=`.
+
 ## Verdicts
 
 Each advisory gets its own verdict; a package shows its most serious one.

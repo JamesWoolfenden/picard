@@ -135,6 +135,36 @@ Per advisory, first match wins:
 A package's verdict is its most serious advisory's: `reachable` > `shipped` >
 `import-only` > `not-executed` > `not-applicable` > `not-shipped`.
 
+## Surface (`surface.go`, `surface_scan.go`)
+
+Triage reduces the cost of alerts; surface reduces their number, by showing what each
+direct dependency costs.
+
+- **What removing it removes** is the production closure minus the closure of the remaining
+  direct dependencies - so a package shared with another dependency (numpy, used by librosa
+  and sentence-transformers) is never attributed to either.
+- **Groups.** A direct dependency that's only otherwise needed by one other direct
+  dependency goes with it (pan's torch, listed for its CPU-index pin, is only there for
+  sentence-transformers). One that several others need is reported as "removing it alone
+  removes nothing".
+- **Extras.** `pkg[extra]` installs the extra's optional dependencies; the lock reader adds
+  them as pkg's own edges, so they're attributed to pkg. (This also fixed `scan`, which
+  previously under-reported what ships.)
+- **Wheel choice.** For the target OS/arch/Python (default: `picard.yaml`'s platform, x86_64,
+  the lock's `requires-python` minimum), the best-fitting wheel across the package's locked
+  variants: exact CPython build > stable ABI (`abi3`, if old enough) > `py3`. That decides
+  *native* (a platform-specific wheel is compiled code) and *size* (unknown when the index
+  doesn't publish it, e.g. PyTorch's, shown as `>=`).
+- **History.** Every advisory ever published against each package, from OSV's batch API
+  without a version (paged) - the churn signal, as opposed to current exposure.
+- **Use.** Names imported from the group's modules (multi-line, aliased and commented
+  `from x import (...)` handled), functions called in coverage, and console commands: each
+  installed package's `entry_points.txt` `[console_scripts]`, matched as words in the
+  Dockerfile, Makefile, compose and launch scripts.
+- **Undeclared imports.** Production imports of a locked package that isn't a direct
+  dependency - flagged with the chain providing it, or as failing in production when only
+  dev dependencies provide it. These are the hidden coupling that breaks a removal.
+
 ## Output (`report.go`)
 
 - **table** - one line per upgrade, then the reasoning, with advisory counts per verdict.

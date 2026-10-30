@@ -27,13 +27,17 @@ var importRe = regexp.MustCompile(`^\s*(?:from\s+([A-Za-z_][\w.]*)\s+import\b|im
 type Imports struct {
 	Production map[string]bool
 	Test       map[string]bool
+	// ProductionNames are the dotted names production code imports - "fastapi.FastAPI" for
+	// `from fastapi import FastAPI`, "numpy" for `import numpy` - a measure of how much of a
+	// package the project actually touches.
+	ProductionNames map[string]bool
 }
 
 // ScanImports walks the project's Python files for import statements. Static and
 // line-based: imports built at runtime (importlib, __import__) aren't seen, which is why
 // coverage (Executed) is the stronger evidence when it's available.
 func ScanImports(root string) (*Imports, error) {
-	result := &Imports{Production: map[string]bool{}, Test: map[string]bool{}}
+	result := &Imports{Production: map[string]bool{}, Test: map[string]bool{}, ProductionNames: map[string]bool{}}
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -52,12 +56,11 @@ func ScanImports(root string) (*Imports, error) {
 			return nil
 		}
 
-		target := result.Production
 		if isTestPath(root, path) {
-			target = result.Test
+			return scanFile(path, result.Test, nil)
 		}
 
-		return scanFile(path, target)
+		return scanFile(path, result.Production, result.ProductionNames)
 	})
 
 	return result, err
@@ -81,7 +84,7 @@ func isTestPath(root, path string) bool {
 	return strings.HasPrefix(name, "test_") || strings.HasSuffix(name, "_test.py") || name == "conftest.py"
 }
 
-func scanFile(path string, into map[string]bool) error {
+func scanFile(path string, into, names map[string]bool) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -92,13 +95,27 @@ func scanFile(path string, into map[string]bool) error {
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	for scanner.Scan() {
-		m := importRe.FindStringSubmatch(scanner.Text())
+		line := stripComment(scanner.Text())
+
+		m := importRe.FindStringSubmatch(line)
 		if m == nil {
 			continue
 		}
 
 		if m[1] != "" {
 			addModule(into, m[1])
+
+			if names != nil && !strings.HasPrefix(m[1], ".") {
+				// `from x import (\n a,\n b,\n)` spans lines until the closing paren.
+				imported := line[strings.Index(line, " import ")+len(" import "):]
+				for strings.Contains(imported, "(") && !strings.Contains(imported, ")") && scanner.Scan() {
+					imported += " " + stripComment(scanner.Text())
+				}
+
+				for _, name := range importedNames(imported) {
+					names[m[1]+"."+name] = true
+				}
+			}
 
 			continue
 		}
@@ -108,11 +125,40 @@ func scanFile(path string, into map[string]bool) error {
 			fields := strings.Fields(part)
 			if len(fields) > 0 {
 				addModule(into, fields[0])
+
+				if names != nil && !strings.HasPrefix(fields[0], ".") {
+					names[fields[0]] = true
+				}
 			}
 		}
 	}
 
 	return scanner.Err()
+}
+
+// stripComment drops a trailing "# ..." - import lines have no string literals to confuse it.
+func stripComment(line string) string {
+	if i := strings.Index(line, "#"); i >= 0 {
+		return line[:i]
+	}
+
+	return line
+}
+
+// importedNames parses the right-hand side of `from x import ...`: "a, b as c", "(a, b)".
+func importedNames(s string) []string {
+	s = strings.NewReplacer("(", " ", ")", " ", "\\", " ").Replace(s)
+
+	var names []string
+
+	for _, part := range strings.Split(s, ",") {
+		fields := strings.Fields(part)
+		if len(fields) > 0 && fields[0] != "*" {
+			names = append(names, fields[0])
+		}
+	}
+
+	return names
 }
 
 func addModule(into map[string]bool, module string) {
@@ -202,6 +248,77 @@ func topLevelModules(distInfo string) []string {
 	}
 
 	return modules
+}
+
+// ScriptOwners maps console commands to the package that installs them, from the installed
+// environment's entry_points.txt ([console_scripts]) - e.g. "uvicorn" -> uvicorn - so a
+// package run from the command line rather than imported is still seen as used.
+func ScriptOwners(sitePackages string) map[string]string {
+	owners := map[string]string{}
+
+	entries, err := os.ReadDir(sitePackages)
+	if err != nil {
+		return owners
+	}
+
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasSuffix(e.Name(), ".dist-info") {
+			continue
+		}
+
+		distInfo := filepath.Join(sitePackages, e.Name())
+
+		data, err := os.ReadFile(filepath.Join(distInfo, "entry_points.txt"))
+		if err != nil {
+			continue
+		}
+
+		dist := distName(distInfo)
+		inScripts := false
+
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+
+			if strings.HasPrefix(line, "[") {
+				inScripts = line == "[console_scripts]"
+
+				continue
+			}
+
+			if name, _, ok := strings.Cut(line, "="); ok && inScripts && dist != "" {
+				owners[strings.TrimSpace(name)] = dist
+			}
+		}
+	}
+
+	return owners
+}
+
+// launchFiles are where a project says how it's run.
+var launchFiles = []string{"Dockerfile", "Containerfile", "Makefile", "Procfile", "docker-compose.yml",
+	"docker-compose.yaml", "compose.yml", "compose.yaml", "entrypoint.sh", "start.sh", "run.sh"}
+
+var wordRe = regexp.MustCompile(`[A-Za-z0-9_.-]+`)
+
+// CommandsUsed returns the packages whose console commands appear in the project's launch
+// files (Dockerfile CMD, Makefile targets, compose commands...).
+func CommandsUsed(root string, scripts map[string]string) map[string]bool {
+	used := map[string]bool{}
+
+	for _, name := range launchFiles {
+		data, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			continue
+		}
+
+		for _, word := range wordRe.FindAllString(string(data), -1) {
+			if pkg, ok := scripts[word]; ok {
+				used[pkg] = true
+			}
+		}
+	}
+
+	return used
 }
 
 // FindSitePackages locates the project's virtualenv site-packages (.venv or venv, Windows or

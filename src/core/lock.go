@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -13,8 +14,28 @@ import (
 type Package struct {
 	Name    string
 	Version string
-	// Deps are the normalized names of the packages this one depends on.
+	// Deps are the normalized names of the packages this one depends on, including the
+	// optional dependencies of any extras it requests (e.g. uvicorn[standard]).
 	Deps []string
+	// Variants are the package's locked builds - usually one, but a package can be locked
+	// at several versions for different platforms (torch from PyPI for Windows/macOS,
+	// torch+cpu from PyTorch's index for Linux).
+	Variants []Variant
+}
+
+// Variant is one locked version of a package and its built distributions.
+type Variant struct {
+	Version string
+	Wheels  []Wheel
+	// HasSdist: a source distribution is available (built locally when no wheel fits).
+	HasSdist bool
+}
+
+// Wheel is one built distribution. Size is 0 when the index didn't report one (PyTorch's
+// index doesn't).
+type Wheel struct {
+	Filename string
+	Size     int64
 }
 
 // Lock is a parsed uv.lock: every resolved package, plus which of them a production install
@@ -25,23 +46,39 @@ type Lock struct {
 	// Direct are the project's own runtime dependencies; DevDirect its dev-group ones.
 	Direct    []string
 	DevDirect []string
+	// MinPython is the lowest Python the lock supports ("3.12" from requires-python
+	// ">=3.12"), or "".
+	MinPython string
 }
 
 type uvDep struct {
-	Name string `toml:"name"`
+	Name  string   `toml:"name"`
+	Extra []string `toml:"extra"`
+}
+
+type uvDist struct {
+	URL  string `toml:"url"`
+	Path string `toml:"path"`
+	Size int64  `toml:"size"`
 }
 
 type uvPackage struct {
-	Name            string             `toml:"name"`
-	Version         string             `toml:"version"`
-	Source          map[string]any     `toml:"source"`
-	Dependencies    []uvDep            `toml:"dependencies"`
-	DevDependencies map[string][]uvDep `toml:"dev-dependencies"`
+	Name                 string             `toml:"name"`
+	Version              string             `toml:"version"`
+	Source               map[string]any     `toml:"source"`
+	Dependencies         []uvDep            `toml:"dependencies"`
+	DevDependencies      map[string][]uvDep `toml:"dev-dependencies"`
+	OptionalDependencies map[string][]uvDep `toml:"optional-dependencies"`
+	Wheels               []uvDist           `toml:"wheels"`
+	Sdist                *uvDist            `toml:"sdist"`
 }
 
 type uvLock struct {
-	Packages []uvPackage `toml:"package"`
+	RequiresPython string      `toml:"requires-python"`
+	Packages       []uvPackage `toml:"package"`
 }
+
+var minPythonRe = regexp.MustCompile(`>=\s*(\d+\.\d+)`)
 
 // NormalizeName applies PEP 503 normalization, so "Python_Dotenv" and "python-dotenv" are
 // the same package.
@@ -66,6 +103,12 @@ func ReadUVLock(path string) (*Lock, error) {
 	}
 
 	lock := &Lock{Packages: map[string]*Package{}}
+	if m := minPythonRe.FindStringSubmatch(raw.RequiresPython); m != nil {
+		lock.MinPython = m[1]
+	}
+
+	optional := map[string]map[string][]uvDep{}
+	requested := map[string][]uvDep{} // depender -> its dependency entries (for extras)
 
 	for _, p := range raw.Packages {
 		name := NormalizeName(p.Name)
@@ -73,6 +116,7 @@ func ReadUVLock(path string) (*Lock, error) {
 		if isProjectSource(p.Source) {
 			lock.Project = name
 			lock.Direct = depNames(p.Dependencies)
+			requested[name] = append(requested[name], p.Dependencies...)
 
 			for _, group := range p.DevDependencies {
 				lock.DevDirect = append(lock.DevDirect, depNames(group)...)
@@ -81,20 +125,67 @@ func ReadUVLock(path string) (*Lock, error) {
 			continue
 		}
 
-		// A package locked at two versions (platform-specific builds, e.g. torch and
-		// torch+cpu) appears twice - keep the first, the dependency edges are the same.
-		if _, seen := lock.Packages[name]; seen {
-			continue
+		variant := Variant{Version: p.Version, HasSdist: p.Sdist != nil}
+		for _, w := range p.Wheels {
+			variant.Wheels = append(variant.Wheels, Wheel{Filename: distFilename(w), Size: w.Size})
 		}
 
-		lock.Packages[name] = &Package{Name: name, Version: p.Version, Deps: depNames(p.Dependencies)}
+		if existing, seen := lock.Packages[name]; seen {
+			// Another build of the same package (see Variant); dependency edges are shared.
+			existing.Variants = append(existing.Variants, variant)
+			existing.Deps = mergeNames(existing.Deps, depNames(p.Dependencies))
+		} else {
+			lock.Packages[name] = &Package{
+				Name: name, Version: p.Version, Deps: depNames(p.Dependencies), Variants: []Variant{variant},
+			}
+		}
+
+		requested[name] = append(requested[name], p.Dependencies...)
+
+		if len(p.OptionalDependencies) > 0 {
+			if optional[name] == nil {
+				optional[name] = map[string][]uvDep{}
+			}
+
+			for extra, deps := range p.OptionalDependencies {
+				optional[name][extra] = append(optional[name][extra], deps...)
+			}
+		}
 	}
 
 	if lock.Project == "" {
 		return nil, fmt.Errorf("%s: no project package (source virtual/editable \".\") found", path)
 	}
 
+	// A dependency on pkg[extra] also installs pkg's optional dependencies for that extra.
+	// They're recorded as pkg's own edges, so they're attributed to it ("uvicorn ->
+	// httptools") - slightly over-attributing if one depender asks for the extra and
+	// another doesn't, which only ever over-reports what ships.
+	for _, deps := range requested {
+		for _, d := range deps {
+			target := lock.Packages[NormalizeName(d.Name)]
+			if target == nil {
+				continue
+			}
+
+			for _, extra := range d.Extra {
+				target.Deps = mergeNames(target.Deps, depNames(optional[target.Name][extra]))
+			}
+		}
+	}
+
 	return lock, nil
+}
+
+func distFilename(d uvDist) string {
+	ref := d.URL
+	if ref == "" {
+		ref = d.Path
+	}
+
+	name := ref[strings.LastIndex(ref, "/")+1:]
+
+	return strings.ReplaceAll(name, "%2B", "+")
 }
 
 func isProjectSource(source map[string]any) bool {
@@ -108,19 +199,32 @@ func isProjectSource(source map[string]any) bool {
 }
 
 func depNames(deps []uvDep) []string {
-	names := make([]string, 0, len(deps))
-	seen := map[string]bool{}
+	return mergeNames(nil, func() []string {
+		names := make([]string, len(deps))
+		for i, d := range deps {
+			names[i] = NormalizeName(d.Name)
+		}
 
-	for _, d := range deps {
-		n := NormalizeName(d.Name)
+		return names
+	}())
+}
+
+// mergeNames appends the names not already present, keeping order.
+func mergeNames(into, more []string) []string {
+	seen := map[string]bool{}
+	for _, n := range into {
+		seen[n] = true
+	}
+
+	for _, n := range more {
 		if !seen[n] {
 			seen[n] = true
 
-			names = append(names, n)
+			into = append(into, n)
 		}
 	}
 
-	return names
+	return into
 }
 
 // Closure is every package reachable from the given roots, each mapped to one shortest

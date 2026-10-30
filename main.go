@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -132,6 +133,58 @@ func main() {
 						return report.WriteTable(os.Stdout)
 					default:
 						return fmt.Errorf("unknown format %q (table, json or vex)", c.String("format"))
+					}
+				},
+			},
+			{
+				Name:      "surface",
+				Aliases:   []string{"f"},
+				Usage:     "ranks direct dependencies by what each alone brings into the production install",
+				UsageText: "picard surface -d . [--coverage coverage.json] [--format table|json]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "directory", Aliases: []string{"d"}, Usage: "project directory", Value: "."},
+					&cli.StringFlag{Name: "lock", Usage: "lock file (default: <directory>/uv.lock)"},
+					&cli.StringFlag{Name: "coverage", Aliases: []string{"c"}, Usage: "coverage.py JSON report, for functions actually called"},
+					&cli.StringFlag{Name: "platform", Usage: "target OS: linux, windows or macos (default: picard.yaml's, else linux)"},
+					&cli.StringFlag{Name: "arch", Usage: "target architecture: x86_64 or arm64", Value: "x86_64"},
+					&cli.StringFlag{Name: "python", Usage: "target Python, e.g. 3.12 (default: the lock's requires-python minimum)"},
+					&cli.BoolFlag{Name: "no-history", Usage: "skip looking up each package's past advisories"},
+					&cli.BoolFlag{Name: "detail", Usage: "list the packages of every dependency, not just the bigger ones"},
+					&cli.StringFlag{Name: "format", Aliases: []string{"f"}, Usage: "output format: table or json", Value: "table"},
+				},
+				Action: func(c *cli.Context) error {
+					dir := c.String("directory")
+
+					platform := c.String("platform")
+					if platform == "" {
+						platform = "linux"
+
+						if d, err := core.ReadDeployment(filepath.Join(dir, "picard.yaml")); err == nil && d.Platform != "" {
+							platform = d.Platform
+						}
+					}
+
+					report, err := core.AnalyzeProjectSurface(core.SurfaceOptions{
+						Directory: dir,
+						LockFile:  c.String("lock"),
+						Coverage:  c.String("coverage"),
+						Target:    core.Target{OS: platform, Arch: c.String("arch"), Python: c.String("python")},
+						History:   !c.Bool("no-history"),
+					})
+					if err != nil {
+						return err
+					}
+
+					switch c.String("format") {
+					case "json":
+						enc := json.NewEncoder(os.Stdout)
+						enc.SetIndent("", "  ")
+
+						return enc.Encode(report)
+					case "table":
+						return report.WriteTable(os.Stdout, c.Bool("detail"))
+					default:
+						return fmt.Errorf("unknown format %q (table or json)", c.String("format"))
 					}
 				},
 			},

@@ -117,6 +117,67 @@ func (o *OSV) Query(packages []*Package) (map[string][]Advisory, error) {
 	return result, nil
 }
 
+// History counts every advisory ever published against each package, at any version - a
+// package's track record, as opposed to its current exposure.
+func (o *OSV) History(names []string) (map[string]int, error) {
+	type pkgQuery struct {
+		Package struct {
+			Name      string `json:"name"`
+			Ecosystem string `json:"ecosystem"`
+		} `json:"package"`
+		PageToken string `json:"page_token,omitempty"`
+	}
+
+	counts := map[string]int{}
+	pending := make([]pkgQuery, len(names))
+	owner := make([]string, len(names))
+
+	for i, n := range names {
+		pending[i].Package.Name = n
+		pending[i].Package.Ecosystem = "PyPI"
+		owner[i] = n
+	}
+
+	// A package with a long history pages its results; keep asking for the next page.
+	for len(pending) > 0 {
+		var batch struct {
+			Results []struct {
+				Vulns []struct {
+					ID string `json:"id"`
+				} `json:"vulns"`
+				NextPageToken string `json:"next_page_token"`
+			} `json:"results"`
+		}
+
+		if err := o.post("/v1/querybatch", map[string]any{"queries": pending}, &batch); err != nil {
+			return nil, err
+		}
+
+		var next []pkgQuery
+
+		var nextOwner []string
+
+		for i, r := range batch.Results {
+			if i >= len(pending) {
+				break
+			}
+
+			counts[owner[i]] += len(r.Vulns)
+
+			if r.NextPageToken != "" {
+				q := pending[i]
+				q.PageToken = r.NextPageToken
+				next = append(next, q)
+				nextOwner = append(nextOwner, owner[i])
+			}
+		}
+
+		pending, owner = next, nextOwner
+	}
+
+	return counts, nil
+}
+
 func (o *OSV) vuln(id string) (*osvVuln, error) {
 	resp, err := o.Client.Get(o.BaseURL + "/v1/vulns/" + id)
 	if err != nil {

@@ -1,13 +1,19 @@
 # Roadmap
 
-Roughly in order of value. Nothing here is started.
+Roughly in order of value.
 
-## Churn: is a package noisy, or risky?
+## Done: surface (`picard surface`)
 
-Part of the original idea, not built yet. A package's alert history says something its
-current alerts don't:
+Per direct dependency: packages it alone brings in, native code, size, every past advisory,
+names used, functions called, console commands run - plus undeclared imports. See the
+README and design doc.
 
-- advisories per year, and the share that were low severity or local-attacker-only;
+## Churn, beyond a total count
+
+`surface` counts each package's past advisories. Still to do:
+
+- advisories per year rather than all-time, and the share that were low severity or
+  local-attacker-only (as assessed);
 - bursts - many advisories published together (an audit sweep of one subsystem, like
   filelock's 17) versus a steady trickle;
 - release cadence and project health from [deps.dev](https://deps.dev) and OpenSSF
@@ -16,12 +22,12 @@ current alerts don't:
 The output would separate "noisy but rarely relevant" from "rarely flagged, so pay attention
 when it is", and could feed a default stance per package.
 
-## Footprint: how much of a package is used
+## Footprint, beyond names used
 
-Also from the original idea. Distinct functions/classes the project's code (and its
-coverage run) touches, against the package's public surface, plus the weight of what it
-pulls in transitively. "Uses 2 functions and drags in 14 packages" is a candidate to replace
-with a few lines of code - useful beyond security.
+`surface` reports names imported and functions called. Still to do: compare against each
+package's public surface ("uses 2 of 340 functions"), and suggest replacements - e.g. a
+sentence-embedding model run with onnxruntime + tokenizers instead of the whole PyTorch
+stack.
 
 ## Better execution evidence
 
