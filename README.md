@@ -134,6 +134,13 @@ The VEX output is a *proposal* to review, not a decision: commit it once you agr
   shipped. Conservative, never under-reports.
 - `uv.lock` only so far.
 
+## Further reading
+
+- [Design](docs/design.md) - evidence layers, verdict rules, and why
+- [Case study: pan's 19 alerts](docs/case-study-pan.md) - how picard came about, including
+  the ranking it first got backwards
+- [Roadmap](docs/roadmap.md) - churn, footprint, more ecosystems, integration
+
 ## Development
 
 ```shell
