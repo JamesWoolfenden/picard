@@ -1,0 +1,42 @@
+repos:
+    - hooks:
+        - id: check-json
+        - id: check-merge-conflict
+        - id: trailing-whitespace
+        - id: end-of-file-fixer
+        - id: check-yaml
+        - id: check-added-large-files
+          args:
+            - --maxkb=1024
+        - id: detect-private-key
+      repo: https://github.com/pre-commit/pre-commit-hooks
+      rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # v6.0.0
+    - hooks:
+        - id: go-fmt
+          name: go fmt
+          entry: gofmt -l -w
+          language: system
+          types:
+            - go
+        - id: go-vet
+          name: go vet
+          entry: go vet ./...
+          language: system
+          pass_filenames: false
+          types:
+            - go
+        - id: go-unit-tests
+          name: go unit tests
+          entry: go test ./...
+          language: system
+          pass_filenames: false
+          types:
+            - go
+        - id: go-mod-tidy
+          name: go mod tidy
+          entry: go mod tidy
+          language: system
+          pass_filenames: false
+          types:
+            - go
+      repo: local

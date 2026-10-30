@@ -1,0 +1,11 @@
+/picard
+picard.exe
+dist/
+bin/
+.idea
+.vscode/
+.claude/
+.DS_Store
+__debug_bin.exe
+coverage.json
+.coverage
