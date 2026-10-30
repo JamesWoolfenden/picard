@@ -1,0 +1,14 @@
+platform: linux
+container: true
+shared_host: false
+outbound_tls: true
+exposed:
+  - HTTP API and web UI (FastAPI/uvicorn), reachable only on the owner's private Tailscale tailnet via a Tailscale sidecar container
+untrusted_input:
+  - audio/video files and their embedded tags on the music share (read-only mount)
+  - responses from Plex, MusicBrainz, Wikipedia, Wikidata, Last.fm, lyrics and YouTube APIs, and the Anthropic API
+notes: >
+  Single-user self-hosted music app on a Synology NAS. Runs in its own Docker container as an
+  unprivileged 'app' user with no other users or untrusted processes in the container. The
+  image is built in GitHub Actions on Linux (ubuntu runners) with uv; packages are installed
+  at image build time, never at runtime. Python 3.12.

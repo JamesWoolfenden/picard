@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/jameswoolfenden/picard/src/core"
@@ -60,6 +61,24 @@ func main() {
 						Usage:   "output format: table, json or vex (OpenVEX)",
 						Value:   "table",
 					},
+					&cli.BoolFlag{
+						Name:    "assess",
+						Aliases: []string{"a"},
+						Usage:   "have Claude read each shipped package's advisories and fixes (needs ANTHROPIC_API_KEY)",
+					},
+					&cli.StringFlag{
+						Name:  "deployment",
+						Usage: "deployment description checked against advisories (default: <directory>/picard.yaml if present)",
+					},
+					&cli.StringFlag{
+						Name:  "model",
+						Usage: "model for --assess",
+						Value: core.DefaultModel,
+					},
+					&cli.BoolFlag{
+						Name:  "no-cache",
+						Usage: "re-assess advisories instead of reusing cached assessments",
+					},
 				},
 				Action: func(c *cli.Context) error {
 					opts := core.Options{
@@ -70,6 +89,33 @@ func main() {
 
 					if opts.Coverage != "" && !core.Exists(opts.Coverage) {
 						return fmt.Errorf("coverage report %s not found", opts.Coverage)
+					}
+
+					deployment := c.String("deployment")
+					if deployment == "" && core.Exists(filepath.Join(opts.Directory, "picard.yaml")) {
+						deployment = filepath.Join(opts.Directory, "picard.yaml")
+					}
+
+					if deployment != "" {
+						d, err := core.ReadDeployment(deployment)
+						if err != nil {
+							return err
+						}
+
+						opts.Deployment = d
+					}
+
+					if c.Bool("assess") {
+						if opts.Deployment == nil {
+							log.Warn().Msg("no picard.yaml deployment description - advisories' preconditions will mostly come out unclear")
+						}
+
+						var assessor core.Assessor = core.NewClaudeAssessor(c.String("model"))
+						if !c.Bool("no-cache") {
+							assessor = &core.CachedAssessor{Inner: assessor, Path: core.DefaultCachePath()}
+						}
+
+						opts.Assessor = assessor
 					}
 
 					report, err := core.Scan(opts)

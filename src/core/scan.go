@@ -1,10 +1,15 @@
 package core
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Options configures a scan.
@@ -15,7 +20,14 @@ type Options struct {
 	// Coverage is an optional coverage.py JSON report (see ReadCoverage).
 	Coverage string
 	OSV      *OSV
+	// Assessor, when set, reads each shipped package's advisories (see assess.go);
+	// Deployment is what they're checked against.
+	Assessor   Assessor
+	Deployment *Deployment
 }
+
+// assessConcurrency bounds parallel assessment requests.
+const assessConcurrency = 4
 
 // Scan runs every check against a project and returns the triaged report.
 func Scan(opts Options) (*Report, error) {
@@ -67,7 +79,61 @@ func Scan(opts Options) (*Report, error) {
 		Owners:   owners,
 	})
 
+	if opts.Assessor != nil {
+		assess(findings, opts.Assessor, opts.Deployment, osv.Client)
+		Rejudge(findings)
+	}
+
 	return &Report{Project: lock.Project, Findings: findings}, nil
+}
+
+// assess attaches an assessment to every advisory of every shipped package - those not
+// shipped need no reading. A failed assessment is logged and left out: that advisory keeps
+// its package-level verdict rather than a guessed one.
+func assess(findings []Finding, assessor Assessor, deployment *Deployment, client *http.Client) {
+	var wg sync.WaitGroup
+
+	sem := make(chan struct{}, assessConcurrency)
+
+	for i := range findings {
+		f := &findings[i]
+		if !f.Shipped {
+			continue
+		}
+
+		evidence := describeEvidence(*f)
+
+		for j := range f.Advisories {
+			a := &f.Advisories[j]
+
+			wg.Add(1)
+
+			go func() {
+				defer wg.Done()
+
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				result, err := assessor.Assess(context.Background(), AssessInput{
+					Package:    f.Package,
+					Version:    f.Version,
+					Advisory:   *a,
+					FixPatch:   FetchFixPatch(client, a.FixRefs),
+					Deployment: deployment,
+					Evidence:   evidence,
+				})
+				if err != nil {
+					log.Warn().Err(err).Str("package", f.Package).Msg("advisory left unassessed")
+
+					return
+				}
+
+				a.Assessment = result
+			}()
+		}
+	}
+
+	wg.Wait()
 }
 
 // Exists reports whether a path exists - for validating flags before a scan.

@@ -117,10 +117,17 @@ func TestReadCoverageSeparatesImportFromCalls(t *testing.T) {
 }
 
 func TestWriteVEXMapsVerdictsToStatuses(t *testing.T) {
+	judged := func(id string, v Verdict) []Advisory {
+		a := advisory(id, "high", "2")
+		a[0].Verdict = v
+
+		return a
+	}
+
 	report := Report{Project: "app", Findings: []Finding{
-		{Package: "testlib", Version: "1", Verdict: VerdictNotShipped, Advisories: advisory("E", "high", "2")},
-		{Package: "locks", Version: "1", Verdict: VerdictImportOnly, Advisories: advisory("B", "high", "2")},
-		{Package: "web", Version: "1", Verdict: VerdictReachable, FixVersion: "2", Advisories: advisory("D", "moderate", "2")},
+		{Package: "testlib", Version: "1", Advisories: judged("E", VerdictNotShipped)},
+		{Package: "locks", Version: "1", Advisories: judged("B", VerdictImportOnly)},
+		{Package: "web", Version: "1", FixVersion: "2", Advisories: judged("D", VerdictReachable)},
 	}}
 
 	var buf bytes.Buffer

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -24,6 +25,13 @@ type Advisory struct {
 	Severity string   `json:"severity"`
 	// Fixed is the lowest version that fixes this advisory above the locked one, or "".
 	Fixed string `json:"fixed,omitempty"`
+	// FixRefs are the advisory's FIX references - usually the commit or pull request.
+	FixRefs []string `json:"fix_refs,omitempty"`
+	// Assessment, Verdict and Reason are this advisory's own triage (see Triage); the
+	// Finding carries the package-level summary.
+	Assessment *Assessment `json:"assessment,omitempty"`
+	Verdict    Verdict     `json:"verdict,omitempty"`
+	Reason     string      `json:"reason,omitempty"`
 }
 
 // OSV is a minimal client for the batch query and per-vulnerability endpoints.
@@ -62,6 +70,10 @@ type osvVuln struct {
 	DatabaseSpecific struct {
 		Severity string `json:"severity"`
 	} `json:"database_specific"`
+	References []struct {
+		Type string `json:"type"`
+		URL  string `json:"url"`
+	} `json:"references"`
 }
 
 // Query returns the advisories for each package (by normalized name) at its locked version.
@@ -159,6 +171,12 @@ func toAdvisory(v *osvVuln, pkg *Package) Advisory {
 		a.Summary = firstLine(v.Details)
 	}
 
+	for _, ref := range v.References {
+		if ref.Type == "FIX" {
+			a.FixRefs = append(a.FixRefs, ref.URL)
+		}
+	}
+
 	for _, aff := range v.Affected {
 		if NormalizeName(aff.Package.Name) != pkg.Name {
 			continue
@@ -179,6 +197,35 @@ func toAdvisory(v *osvVuln, pkg *Package) Advisory {
 	}
 
 	return a
+}
+
+var githubFixRe = regexp.MustCompile(`^https://github\.com/[^/]+/[^/]+/(commit/[0-9a-f]{7,40}|pull/\d+)/?$`)
+
+// FetchFixPatch returns the code change behind the first GitHub commit or pull request
+// among an advisory's FIX references (GitHub serves either as a patch at <url>.patch), or
+// "" if there isn't one or it can't be fetched - the assessment then works from the
+// advisory text alone.
+func FetchFixPatch(client *http.Client, refs []string) string {
+	for _, ref := range refs {
+		ref = strings.TrimSuffix(ref, "/")
+		if !githubFixRe.MatchString(ref) {
+			continue
+		}
+
+		resp, err := client.Get(ref + ".patch")
+		if err != nil {
+			continue
+		}
+
+		data, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+		resp.Body.Close()
+
+		if err == nil && resp.StatusCode == http.StatusOK {
+			return string(data)
+		}
+	}
+
+	return ""
 }
 
 func firstLine(s string) string {

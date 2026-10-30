@@ -24,6 +24,11 @@ For a [uv](https://docs.astral.sh/uv/) project (`uv.lock`):
 4. **Executed** (optional) - reads a coverage.py report measured with third-party code
    included, and separates packages that were merely *imported* from those whose functions
    were actually *called*.
+5. **Assessed** (optional, `--assess`) - Claude reads each shipped package's advisories and
+   their fix commits, and says what each one is actually about: specific functions, shipped
+   *data* (like a CA bundle), or install time only; what an attacker needs; and whether your
+   deployment (`picard.yaml`) meets that. The affected functions are then checked against
+   what the coverage run actually called - deterministically, not by the model.
 
 ## Usage
 
@@ -41,25 +46,74 @@ coverage json -i
 picard scan -d . --coverage coverage.json
 ```
 
-Example (pan, before its October 2026 fixes):
+Advisory assessment (needs `ANTHROPIC_API_KEY`; answers are cached per advisory, package
+version, deployment and model in the user cache directory, so re-runs are free):
+
+```shell
+picard scan -d . --coverage coverage.json --assess
+```
+
+Describe the deployment in `picard.yaml` next to the lock file (or pass `--deployment`).
+State only what you're sure of - anything left out is treated as unknown, never as safe:
+
+```yaml
+platform: linux
+container: true
+shared_host: false        # no other, untrusted local users/processes
+outbound_tls: true        # makes HTTPS calls to other services
+exposed:
+  - HTTP API, only on a private Tailscale tailnet
+untrusted_input:
+  - media files and their tags on a read-only share
+notes: >
+  Packages are installed at image build time on Linux CI, never at runtime.
+```
+
+## Example
+
+pan (a self-hosted music app) before its October 2026 fixes. Dependabot showed 19 alerts.
+
+Package evidence only, from its test suite's coverage - note how wrong this ranking is:
 
 ```text
-pan: 20 advisories across 3 packages - 3 upgrade(s) fix all of them
-
 VERDICT      PACKAGE     VERSION    FIX         SEVERITY  ALERTS  IMPORTED  EXECUTED
 reachable    filelock    4.1.0      4.2.1       high      17      no        yes
 reachable    setuptools  84.0.0     84.1.0      low       1       no        yes
 import-only  certifi     2026.7.22  2026.10.19  critical  2       no        yes
 ```
 
+With `--assess` and pan's `picard.yaml`:
+
+```text
+pan: 20 advisories across 3 packages - 3 upgrade(s) fix all of them
+
+VERDICT         PACKAGE     VERSION    FIX         SEVERITY  ALERTS  IMPORTED  EXECUTED
+reachable       certifi     2026.7.22  2026.10.19  critical  2       no        yes
+not-applicable  filelock    4.1.0      4.2.1       high      17      no        yes
+not-applicable  setuptools  84.0.0     84.1.0      low       1       no        yes
+
+certifi 2026.7.22: the problem is in data the package ships, used wherever the package is:
+The issue is in the bundled CA data. The deployment makes outbound TLS calls via requests ...
+
+filelock 4.1.0: preconditions don't hold here: The attack needs a second local user who can
+create files in the lock directory, but the app runs alone in its own container ...
+  17 advisories: 17 not-applicable
+
+setuptools 84.0.0: preconditions don't hold here: The path escape depends on Windows
+drive-qualified absolute path semantics ... This deployment runs only on Linux ...
+```
+
 ## Verdicts
+
+Each advisory gets its own verdict; a package shows its most serious one.
 
 | Verdict | Meaning | OpenVEX status |
 |---|---|---|
-| `reachable` | imported by the project, or its functions ran | `affected` |
-| `shipped` | in the production install, no evidence about use (no coverage given) | `under_investigation` |
+| `reachable` | the vulnerable code ran, its data is in use, or (unassessed) the package is used | `affected` |
+| `shipped` | in the production install, no evidence about use; or install-time only | `under_investigation` |
 | `import-only` | imported in the coverage run, but none of its functions called | `not_affected` / `vulnerable_code_not_in_execute_path` |
-| `not-executed` | shipped, but none of its code ran in the coverage run | `not_affected` / `vulnerable_code_not_in_execute_path` |
+| `not-executed` | shipped, but none of the affected code ran in the coverage run | `not_affected` / `vulnerable_code_not_in_execute_path` |
+| `not-applicable` | the advisory's preconditions don't hold for this deployment | `not_affected` / the assessment's justification |
 | `not-shipped` | only dev/test dependencies pull it in | `not_affected` / `component_not_present` |
 
 The VEX output is a *proposal* to review, not a decision: commit it once you agree with it.
@@ -67,12 +121,14 @@ The VEX output is a *proposal* to review, not a decision: commit it once you agr
 ## Limits - read before trusting a `not_affected`
 
 - **Coverage is only as good as the run.** A test suite that stubs out the network never
-  calls an HTTP library's TLS code, though production does on every request. In the example
-  above, certifi - the alert that matters most - shows as `import-only` for exactly that
-  reason. Prefer a run that exercises the app the way production does.
-- **Package-level, not advisory-level (yet).** "Some of filelock's functions ran" isn't the
-  same as "the vulnerable `ReadWriteLock` ran". Matching each advisory's affected functions
-  (or data, as with certifi's CA bundle) against the evidence is the next stage.
+  calls an HTTP library's TLS code, though production does on every request. Prefer a run
+  that exercises the app the way production does.
+- **`not-applicable` is only as good as `picard.yaml`.** Claude checks preconditions against
+  what you wrote; a wrong deployment description gives wrong verdicts. The reasoning is in
+  every verdict so it can be checked.
+- **Assessments are model judgement.** Affected functions are extracted by a model from the
+  advisory and fix; the match against coverage is exact, the extraction isn't. Unassessed
+  advisories (a failed or declined request) keep their package-level verdict.
 - **Static imports only**: `importlib`/`__import__` aren't seen; coverage covers them.
 - **Platform markers are ignored**: a dependency only installed on Windows still counts as
   shipped. Conservative, never under-reports.

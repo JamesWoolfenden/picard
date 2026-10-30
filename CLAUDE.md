@@ -15,8 +15,12 @@ Module path: `github.com/jameswoolfenden/picard`
 - `imports.go` - static import scan of the project's own code; module -> package owners
   from the installed environment's dist-info
 - `coverage.go` - coverage.py JSON: per-module loaded vs functions actually called
-- `osv.go` - OSV batch query + per-advisory details, fix-version selection
-- `triage.go` - evidence -> Finding + Verdict
+- `osv.go` - OSV batch query + per-advisory details, fix-version selection, fix patches
+- `deploy.go` - `picard.yaml` deployment description
+- `assess.go` - Assessment, on-disk cache, symbol matching against coverage
+- `claude.go` - Claude assessor (beta endpoint: structured output + server-side fallbacks,
+  since advisories describe vulnerabilities and a refusal is possible)
+- `triage.go` - evidence -> per-advisory and per-package Verdict
 - `report.go` - table, JSON and OpenVEX output
 - `scan.go` - wires it together
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -53,13 +54,45 @@ func (r Report) WriteTable(w io.Writer) error {
 		return err
 	}
 
-	fmt.Fprintln(w)
-
 	for _, f := range r.Findings {
-		fmt.Fprintf(w, "%s %s: %s\n", f.Package, f.Version, f.Reason)
+		fmt.Fprintf(w, "\n%s %s: %s\n", f.Package, f.Version, f.Reason)
+
+		if len(f.Advisories) > 1 {
+			fmt.Fprintf(w, "  %d advisories: %s\n", len(f.Advisories), verdictCounts(f.Advisories))
+		}
+
+		// The advisories that still need acting on, individually.
+		for _, a := range f.Advisories {
+			if verdictRank(a.Verdict) < verdictRank(VerdictShipped) || len(f.Advisories) == 1 {
+				continue
+			}
+
+			fmt.Fprintf(w, "  - %s (%s) %s: %s\n", a.ID, a.Severity, a.Verdict, a.Reason)
+		}
 	}
 
 	return nil
+}
+
+func verdictCounts(advs []Advisory) string {
+	counts := map[Verdict]int{}
+	for _, a := range advs {
+		counts[a.Verdict]++
+	}
+
+	verdicts := make([]Verdict, 0, len(counts))
+	for v := range counts {
+		verdicts = append(verdicts, v)
+	}
+
+	sort.Slice(verdicts, func(i, j int) bool { return verdictRank(verdicts[i]) > verdictRank(verdicts[j]) })
+
+	parts := make([]string, len(verdicts))
+	for i, v := range verdicts {
+		parts[i] = fmt.Sprintf("%d %s", counts[v], v)
+	}
+
+	return strings.Join(parts, ", ")
 }
 
 func yesNo(b bool) string {
@@ -128,12 +161,17 @@ func (r Report) WriteVEX(w io.Writer, now time.Time) error {
 			s := vexStatement{
 				Vulnerability:   vexVulnerability{Name: a.ID, Aliases: a.Aliases},
 				Products:        []vexProduct{product},
-				ImpactStatement: "picard: " + f.Reason,
+				ImpactStatement: "picard: " + a.Reason,
 			}
 
-			switch f.Verdict {
+			switch a.Verdict {
 			case VerdictNotShipped:
 				s.Status, s.Justification = "not_affected", "component_not_present"
+			case VerdictNotApplicable:
+				s.Status, s.Justification = "not_affected", "vulnerable_code_cannot_be_controlled_by_adversary"
+				if a.Assessment != nil && a.Assessment.Justification != "" {
+					s.Justification = a.Assessment.Justification
+				}
 			case VerdictNotExecuted, VerdictImportOnly:
 				s.Status, s.Justification = "not_affected", "vulnerable_code_not_in_execute_path"
 			case VerdictReachable:
@@ -156,7 +194,7 @@ func (r Report) WriteVEX(w io.Writer, now time.Time) error {
 
 func upgradeAction(f Finding) string {
 	if f.FixVersion == "" {
-		return "no fixed version published yet - " + strings.TrimPrefix(f.Reason, "picard: ")
+		return "no fixed version published yet - " + f.Reason
 	}
 
 	return fmt.Sprintf("upgrade %s to %s or later", f.Package, f.FixVersion)
