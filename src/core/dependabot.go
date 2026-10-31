@@ -164,7 +164,9 @@ func decide(a Alert, report *Report) AlertDecision {
 	case VerdictNotShipped:
 		d.Action, d.DismissReason = ActionDismiss, "not_used"
 	case VerdictNotExecuted, VerdictImportOnly:
-		d.Action, d.DismissReason, d.Judged = ActionDismiss, "not_used", true
+		// govulncheck's call graph is a fact; a coverage run is only as good as the run.
+		calledNowhere := adv.GoReach != nil && adv.GoReach.Level == GoReachImported && adv.GoReach.Fact()
+		d.Action, d.DismissReason, d.Judged = ActionDismiss, "not_used", !calledNowhere
 	case VerdictNotApplicable:
 		d.Action, d.DismissReason, d.Judged = ActionDismiss, "tolerable_risk", true
 	}

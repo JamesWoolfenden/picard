@@ -14,6 +14,10 @@ Module path: `github.com/jameswoolfenden/picard`
 - `lock.go` - uv.lock parsing, dependency closure with "why is this here" chains
 - `npmlock.go`, `npmimports.go` - package-lock.json parsing (same Lock model, ecosystem npm)
   and the JS/TS import scan; `scan` picks the lock by file name
+- `golock.go` - go.mod parsing plus stdlib; what the build compiles in from `go list -deps`
+  across platforms
+- `govulncheck.go` - govulncheck in-process (`golang.org/x/vuln/scan`): per-advisory call
+  reachability from its JSON findings
 - `imports.go` - static import scan of the project's own code; module -> package owners
   from the installed environment's dist-info
 - `coverage.go` - coverage.py JSON: per-module loaded vs functions actually called

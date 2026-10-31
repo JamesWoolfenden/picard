@@ -121,7 +121,8 @@ picard dependabot -d . --assess --apply-judged        # also the judged ones - r
 | picard verdict | Proposal | Dismissed by |
 |---|---|---|
 | `not-shipped` | dismiss as `not_used` | `--apply` (a fact from the lock file) |
-| `not-executed`, `import-only` | dismiss as `not_used` | `--apply-judged` only (rests on a coverage run) |
+| `not-executed` from govulncheck (Go) | dismiss as `not_used` | `--apply` (a fact from the call graph) |
+| `not-executed`, `import-only` otherwise | dismiss as `not_used` | `--apply-judged` only (rests on a coverage run) |
 | `not-applicable` | dismiss as `tolerable_risk` | `--apply-judged` only (rests on a model's assessment) |
 | `reachable`, `shipped` | keep open | - |
 
@@ -284,8 +285,16 @@ The VEX output is a *proposal* to review, not a decision: commit it once you agr
   linux/amd64 (with and without cgo), linux/arm64, darwin/arm64 and windows/amd64 and
   combined, so build tags can't hide a package. Go advisories name the affected packages,
   so an advisory whose packages the build compiles in on no platform is `not-shipped` - a
-  fact; whether vulnerable *functions* are called needs govulncheck. Without a working
-  `go` command, every required module counts as shipped.
+  fact. For the rest, picard runs [govulncheck](https://go.dev/doc/security/vuln/) (built
+  in, no install needed) on the same platforms with the stdlib at that version, and its call
+  graph decides: a vulnerable function called is `reachable`, with the call path as the
+  reason; a vulnerable package compiled in but its vulnerable functions never called is
+  `not-executed` - also a fact, so `dependabot --apply` dismisses it. A cgo platform with no
+  C compiler to type-check its C files is analysed with cgo off, and the reason says so;
+  those "never called" verdicts then count as judged. The call graph errs towards
+  `reachable` (a call through an interface counts any implementation). It takes a few
+  seconds a platform. Without a working `go` command, every required module counts as
+  shipped.
 - `--coverage`, `--assess` and `surface` are Python-only for now.
 
 ## Further reading

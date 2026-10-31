@@ -39,8 +39,10 @@ stack.
 ## More ecosystems and lock files
 
 - Python: `poetry.lock`, `requirements.txt` with hashes, `pdm.lock`.
-- Go: done for `go.mod`, with package-level reachability from `go list -deps`. Still to do:
-  symbol-level reachability (govulncheck's call graph), and the actual toolchain version.
+- Go: done for `go.mod`, with package-level reachability from `go list -deps` and
+  function-level from govulncheck's call graph. Still to do: the toolchain version the build
+  actually uses (Dockerfile `FROM golang:`, CI `setup-go`) rather than go.mod's minimum, and
+  govulncheck on pull requests' go.mod (it analyses the checkout's own).
 - npm: coverage evidence (v8 / vitest coverage), `surface`, and `npm audit`-style fix paths. Basic `scan` of `package-lock.json` is done.
 
 ## Platform markers

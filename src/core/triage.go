@@ -75,6 +75,8 @@ type Evidence struct {
 	Executed map[string]*ModuleUse
 	// Owners maps top-level module -> package (from the installed environment).
 	Owners map[string]string
+	// GoReach is govulncheck's findings by Go vulnerability id - nil when it didn't run.
+	GoReach map[string]*GoReach
 }
 
 var severityRank = map[string]int{"critical": 4, "high": 3, "moderate": 2, "medium": 2, "low": 1}
@@ -154,6 +156,12 @@ func Triage(advisories map[string][]Advisory, ev Evidence) []Finding {
 			}
 		}
 
+		if ev.GoReach != nil {
+			for j := range f.Advisories {
+				f.Advisories[j].GoReach = goReachFor(f.Advisories[j], ev.GoReach)
+			}
+		}
+
 		if ev.Executed != nil {
 			f.Executed = UseNo
 
@@ -229,6 +237,34 @@ func verdictRank(v Verdict) int {
 	}[v]
 }
 
+// compactTrace is a call path short enough for a reason: the project's own function, then
+// the last two calls into the vulnerable code (the whole path is in the JSON).
+func compactTrace(trace []string) string {
+	if len(trace) > 4 {
+		trace = append([]string{trace[0], "…"}, trace[len(trace)-2:]...)
+	}
+
+	return strings.Join(trace, " → ")
+}
+
+func withoutCgo(r *GoReach) string {
+	if r.Fact() {
+		return ""
+	}
+
+	return "; cgo files unseen on " + strings.Join(r.WithoutCgo, ", ") + " - no C compiler for them"
+}
+
+func firstNonEmptyList(lists ...[]string) []string {
+	for _, l := range lists {
+		if len(l) > 0 {
+			return l
+		}
+	}
+
+	return nil
+}
+
 func firstN(items []string, n int) []string {
 	if len(items) <= n {
 		return items
@@ -277,9 +313,32 @@ func judgeAdvisory(f Finding, a Advisory, pkgVerdict Verdict, pkgReason string) 
 			" affected, and the build compiles none of them in (go list -deps, across platforms)"
 	}
 
+	// So is govulncheck's call graph - except that an assessment can still find a called
+	// function's preconditions don't hold here.
+	if f.Shipped && a.GoReach != nil {
+		switch a.GoReach.Level {
+		case GoReachCalled:
+			if a.Assessment == nil || a.Assessment.Applies != "no" {
+				return VerdictReachable, "the build calls vulnerable code (govulncheck, " + a.GoReach.Platform + "): " +
+					compactTrace(a.GoReach.Trace)
+			}
+		case GoReachImported:
+			return VerdictNotExecuted, "the build compiles in " + strings.Join(firstN(firstNonEmptyList(a.Compiled, a.AffectedPackages), 3), ", ") +
+				", but nothing calls its vulnerable functions (govulncheck's call graph, across platforms" + withoutCgo(a.GoReach) + ")"
+		case GoReachRequired:
+			return VerdictNotShipped, "the build requires the module but imports none of the affected packages (govulncheck, across platforms" +
+				withoutCgo(a.GoReach) + ")"
+		}
+	}
+
 	if f.Shipped && a.CompiledKnown && a.Assessment == nil && pkgVerdict != VerdictReachable {
-		return VerdictShipped, "the build compiles in the affected " + strings.Join(firstN(a.Compiled, 3), ", ") +
-			" - whether the vulnerable functions are called needs govulncheck"
+		why := "whether the vulnerable functions are called needs govulncheck, which couldn't run"
+		if a.GoReach != nil {
+			why = "govulncheck doesn't report it for this build (not in the Go vulnerability database, or not for this version), " +
+				"so whether the vulnerable functions are called is unknown"
+		}
+
+		return VerdictShipped, "the build compiles in the affected " + strings.Join(firstN(a.Compiled, 3), ", ") + " - " + why
 	}
 
 	as := a.Assessment

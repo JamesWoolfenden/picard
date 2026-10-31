@@ -47,6 +47,19 @@ and its advisories name the affected import paths. picard compares them with wha
 tag can't hide a package - and an advisory none of whose packages is compiled in anywhere
 is `not-shipped`, as a fact.
 
+For what is compiled in, picard runs govulncheck in-process (`golang.org/x/vuln/scan`) on
+the same platforms, with `GOVERSION` set to the stdlib version picard looked up so both
+agree on what's vulnerable. Its JSON stream has a finding per level reached - module,
+package, symbol - told apart by the first frame of each trace; picard keeps the deepest
+across platforms. A symbol finding is `reachable` with its call path; a package finding
+without one is `not-executed`. Findings use the Go database's `GO-` ids, matched through
+aliases. Both are facts from the call graph, so `--apply` acts on them - except where a
+platform's cgo files couldn't be type-checked (no C compiler for it; `go list` doesn't
+need one, govulncheck does). That platform is re-run with cgo off, which can miss a call
+only its C-using files make, so "never called" then counts as judged. An advisory
+govulncheck doesn't report (not in the Go database, or not for this version) keeps
+`shipped`, saying so.
+
 The fix version per advisory is the lowest fixed version above the locked one; per package,
 the highest of those - the one upgrade that closes them all.
 
@@ -165,8 +178,9 @@ A package's verdict is its most serious advisory's: `reachable` > `shipped` >
 - **Matching** is by advisory id: OSV's id or any of its aliases equals the alert's GHSA
   id, for the same package (names compared per ecosystem). No match - typically the lock
   already has the fix - means skip.
-- **Two tiers of automation.** A `not-shipped` verdict is a fact from the lock graph, so
-  `--apply` dismisses it. Verdicts resting on a coverage run or a model's assessment are
+- **Two tiers of automation.** A `not-shipped` verdict is a fact from the lock graph, and
+  a Go `not-executed` from govulncheck's complete call graph is too, so `--apply` dismisses
+  them. Verdicts resting on a coverage run or a model's assessment are
   dismissed only with `--apply-judged`, because they're exactly as good as that evidence.
   Dependabot's `not_used` and `tolerable_risk` reasons carry picard's reasoning as the
   dismissal comment (truncated to Dependabot's 280 characters).

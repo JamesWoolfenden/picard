@@ -32,6 +32,8 @@ type Advisory struct {
 	AffectedPackages []string `json:"affected_packages,omitempty"`
 	Compiled         []string `json:"compiled,omitempty"`
 	CompiledKnown    bool     `json:"compiled_known,omitempty"`
+	// GoReach is what govulncheck's call graph says about it, when govulncheck ran.
+	GoReach *GoReach `json:"go_reach,omitempty"`
 	// Assessment, Verdict and Reason are this advisory's own triage (see Triage); the
 	// Finding carries the package-level summary.
 	Assessment *Assessment `json:"assessment,omitempty"`

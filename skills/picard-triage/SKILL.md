@@ -59,7 +59,9 @@ some GitHub doesn't:
 picard scan -d <lock directory> --format json
 ```
 
-for every directory holding a `uv.lock` or `package-lock.json` (skip `node_modules`, `.venv`).
+for every directory holding a `uv.lock`, `package-lock.json` or `go.mod` (skip
+`node_modules`, `.venv`, `vendor`). For Go this includes the standard library, which
+Dependabot never alerts on - expect unalerted stdlib advisories.
 Keep the advisories with a shipped verdict (`reachable`, `shipped`) that match no alert;
 note whether an open PR's `removes` covers them.
 
@@ -122,13 +124,29 @@ without them, unless they're `not-shipped` or clearly outweighed by what it remo
   the top of the chain really a dev/build tool? For npm with a bundler, picard already
   checked whether the code's imports reach it; if there's a build output directory
   (`dist/`, `build/`), confirm the package isn't in it.
+- **Go `dismiss`, not judged** (`not-executed` with `go_reach.level` `imported`) -
+  govulncheck's call graph found no path to a vulnerable function on any platform. A fact,
+  as solid as `not-shipped`; no need to second-guess it.
 - **`dismiss`, judged** - read each `reason`. These rest on a coverage run (did it exercise
-  the real paths?) or a model's assessment against `picard.yaml` (are the deployment facts
-  right?). Say for each whether you agree.
+  the real paths?), a model's assessment against `picard.yaml` (are the deployment facts
+  right?), or for Go a govulncheck run with a platform's cgo files unseen (does the project
+  have its own cgo code, or use cgo-only stdlib paths - the `net` resolver, `os/user` - on
+  that platform?). Say for each whether you agree.
 - **`keep-open`** - find the fix: an open PR whose `removes` covers it, else the upgrade
   that does (`fix_version` from `picard scan`), and how to apply it
   (`uv lock --upgrade-package <pkg>`, `npm update <pkg>` / `npm install <pkg>@<version>`
   in the lock's directory).
+- **Go `reachable`** - `go_reach.trace` (in `picard scan --format json`) is the call path
+  from the project's code to the vulnerable function. Read it: govulncheck errs towards
+  reachable, so a call through an interface counts every implementation
+  (`WriteTable → fmt.Fprintf → tls.(*Conn).Write` means the writer *could* be a TLS
+  connection). Say whether the path is real. Even if it isn't, the fix is usually cheap - so
+  prefer the upgrade over a `tolerable_risk` dismissal, and only dismiss on the user's say.
+- **Go stdlib** - picard checks the stdlib at go.mod's `toolchain`/`go` version, a minimum.
+  Find the Go the project is really built with (Dockerfile `FROM golang:`, CI `setup-go`,
+  `.go-version`); if that already has the fix, the advisory doesn't apply to what ships, and
+  the clean fix is raising the `toolchain` line so picard (and the next reader) agree. Either
+  way the upgrade is a `toolchain`/`go` line bump, not a dependency bump.
 - **`skip`** - say why picard couldn't judge it (usually a manifest it can't read).
 
 ### f. Unalerted shipped advisories

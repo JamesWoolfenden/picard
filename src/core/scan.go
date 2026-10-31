@@ -45,6 +45,7 @@ func Scan(opts Options) (*Report, error) {
 		imported map[string]bool
 		owners   map[string]string
 		executed map[string]*ModuleUse
+		goReach  map[string]*GoReach
 	)
 
 	switch filepath.Base(lockFile) {
@@ -60,6 +61,8 @@ func Scan(opts Options) (*Report, error) {
 		if imported, err = ScanGoImports(opts.Directory, lock); err != nil {
 			return nil, fmt.Errorf("scanning imports: %w", err)
 		}
+
+		goReach = runGoVulnCheck(lockFile, opts.Directory, lock)
 	case "package-lock.json":
 		if opts.Coverage != "" {
 			return nil, fmt.Errorf("--coverage is a coverage.py report: it doesn't apply to an npm lock")
@@ -117,6 +120,7 @@ func Scan(opts Options) (*Report, error) {
 		Imported: imported,
 		Executed: executed,
 		Owners:   owners,
+		GoReach:  goReach,
 	})
 
 	if opts.Assessor != nil {
@@ -125,6 +129,32 @@ func Scan(opts Options) (*Report, error) {
 	}
 
 	return &Report{Project: lock.Project, Ecosystem: lock.Ecosystem, Findings: findings}, nil
+}
+
+// runGoVulnCheck is govulncheck's findings for the module, or nil when they can't be had.
+// It analyses the source and its own go.mod, so only when that's the go.mod being scanned
+// (not, say, a pull request's, checked against this checkout) and go list could load it.
+func runGoVulnCheck(goMod, dir string, lock *Lock) map[string]*GoReach {
+	modAbs, err1 := filepath.Abs(goMod)
+	dirAbs, err2 := filepath.Abs(dir)
+
+	if err1 != nil || err2 != nil || filepath.Dir(modAbs) != dirAbs || lock.Compiled == nil {
+		return nil
+	}
+
+	goVersion := ""
+	if std := lock.Packages[GoStdlib]; std != nil {
+		goVersion = std.Version
+	}
+
+	reach, err := goVulnCheck(dir, goVersion)
+	if err != nil {
+		log.Warn().Err(err).Msg("govulncheck failed - Go advisories keep their package-level verdicts")
+
+		return nil
+	}
+
+	return reach
 }
 
 // LockFiles are the files picard reads, in the order it looks for them.
