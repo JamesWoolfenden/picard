@@ -127,6 +127,14 @@ Each dismissal carries picard's reason as its comment (Dependabot allows 280 cha
 so whoever reads the alert later sees why. Alerts on manifests picard can't read yet, or
 whose advisory picard doesn't find at the locked version, are skipped, not dismissed.
 
+It starts by checking the repository's Dependabot setup, since that decides how noisy the
+alerts and PRs are: alerts on, **security updates on** (so an alert that matters gets a fix
+PR), and **version updates off** (`open-pull-requests-limit: 0` - routine bumps that fix no
+alert; `picard scan` finds the occasional one that fixes an advisory GitHub doesn't know
+about). Each problem comes with the command or config change that fixes it, and open
+Dependabot PRs are labelled security fix or version bump. Pinning is
+[ghat](https://github.com/JamesWoolfenden/ghat)'s job, so it isn't checked here.
+
 Needs a GitHub token (`GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`); dismissing needs
 write access to Dependabot alerts. `--state fixed --lock old/uv.lock` replays past alerts
 against an old lock, for checking picard's proposals against decisions already made.

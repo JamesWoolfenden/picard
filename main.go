@@ -88,7 +88,7 @@ func main() {
 			},
 			{
 				Name:  "dependabot",
-				Usage: "proposes an action for each of a repository's Dependabot alerts, and with --apply dismisses the ones that don't reach it",
+				Usage: "checks a repository's Dependabot setup, proposes an action for each alert, and with --apply dismisses the ones that don't reach it",
 				UsageText: "picard dependabot -d path/to/checkout [--repo owner/name] [--apply | --apply-judged]\n" +
 					"   alerts are matched to picard's verdicts by advisory id; dry run unless --apply",
 				Flags: append([]cli.Flag{
@@ -119,6 +119,11 @@ func main() {
 						return err
 					}
 
+					settings, err := core.CheckDependabotSettings(gh, repo, opts.Directory)
+					if err != nil {
+						return err
+					}
+
 					decisions, err := core.PlanDependabot(gh, core.DependabotOptions{
 						Repo:      repo,
 						Directory: opts.Directory,
@@ -140,10 +145,12 @@ func main() {
 						enc := json.NewEncoder(os.Stdout)
 						enc.SetIndent("", "  ")
 
-						if err := enc.Encode(decisions); err != nil {
+						if err := enc.Encode(map[string]any{"settings": settings, "alerts": decisions}); err != nil {
 							return err
 						}
 					case "table":
+						core.WriteSettings(os.Stdout, repo, settings)
+
 						if err := core.WriteDecisions(os.Stdout, repo, decisions); err != nil {
 							return err
 						}
