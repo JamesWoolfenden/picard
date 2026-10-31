@@ -385,13 +385,27 @@ func pythonFit(pyTag, abiTag, python string) int {
 	return 0
 }
 
-// WriteSurfaceTable writes the ranked dependencies.
+// WriteTable writes the ranked dependencies, then what each brings in and the undeclared
+// imports.
 func (r SurfaceReport) WriteTable(w io.Writer, detail bool) error {
-	fmt.Fprintf(w, "%s ships %d packages (%s %s, Python %s). What each direct dependency alone brings in:\n\n",
-		r.Project, r.Total, r.Target.OS, r.Target.Arch, r.Target.Python)
+	width := textWidth()
+
+	fmt.Fprintf(w, "%s ships %s (%s %s, Python %s). What each direct dependency alone brings in:\n\n",
+		r.Project, plural(r.Total, "package"), r.Target.OS, r.Target.Arch, r.Target.Python)
+
+	coverage := false
+	for _, s := range r.Entries {
+		coverage = coverage || s.Called != nil
+	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "DEPENDENCY\tPACKAGES\tNATIVE\tSIZE\tPAST ADVISORIES\tNAMES USED\tFUNCTIONS CALLED")
+
+	header := "DEPENDENCY\tPACKAGES\tNATIVE\tSIZE\tPAST ADVISORIES\tUSED"
+	if coverage {
+		header += "\tFUNCTIONS CALLED"
+	}
+
+	fmt.Fprintln(tw, header)
 
 	for _, s := range r.Entries {
 		name := s.Dependency
@@ -399,29 +413,27 @@ func (r SurfaceReport) WriteTable(w io.Writer, detail bool) error {
 			name += " (+" + strings.Join(s.Also, ", +") + ")"
 		}
 
-		called := "-"
-		if s.Called != nil {
-			called = fmt.Sprint(len(s.Called))
+		row := fmt.Sprintf("%s\t%d\t%d\t%s\t%d\t%s", name, len(s.Packages), s.Native(), formatSize(s),
+			s.AdvisoryHistory(), usedSummary(s))
+		if coverage {
+			row += "\t" + fmt.Sprint(len(s.Called))
 		}
 
-		used := fmt.Sprint(len(s.UsedNames))
-		if s.Command {
-			used += " + command"
-		}
-
-		fmt.Fprintf(tw, "%s\t%d\t%d\t%s\t%d\t%s\t%s\n", name, len(s.Packages), s.Native(), formatSize(s),
-			s.AdvisoryHistory(), used, called)
+		fmt.Fprintln(tw, row)
 	}
 
 	if err := tw.Flush(); err != nil {
 		return err
 	}
 
+	listed := false
+
 	for _, s := range r.Entries {
 		if len(s.Packages) == 0 {
 			if len(s.SharedWith) > 0 {
-				fmt.Fprintf(w, "\n%s: removing it alone removes nothing - %s also need it\n",
-					s.Dependency, strings.Join(s.SharedWith, ", "))
+				fmt.Fprintf(w, "\n%s\n", s.Dependency)
+				fmt.Fprint(w, wrap("removing it alone removes nothing - "+strings.Join(s.SharedWith, ", ")+
+					" also need it", "  ", width))
 			}
 
 			continue
@@ -431,24 +443,79 @@ func (r SurfaceReport) WriteTable(w io.Writer, detail bool) error {
 			continue
 		}
 
-		fmt.Fprintf(w, "\n%s brings in: %s\n", s.Dependency, packageList(s.Packages))
+		listed = true
+
+		fmt.Fprintf(w, "\n%s\n", s.Dependency)
+		fmt.Fprint(w, wrap("brings in: "+packageList(s.Packages), "  ", width))
 
 		if len(s.UsedNames) > 0 {
-			fmt.Fprintf(w, "  the project uses: %s\n", strings.Join(firstN(s.UsedNames, 12), ", "))
+			names := firstN(s.UsedNames, 12)
+
+			text := "uses: " + strings.Join(names, ", ")
+			if len(s.UsedNames) > len(names) {
+				text += fmt.Sprintf(" and %d more", len(s.UsedNames)-len(names))
+			}
+
+			fmt.Fprint(w, wrap(text, "  ", width))
 		}
 	}
 
-	for _, u := range r.Undeclared {
-		if u.DevOnly {
-			fmt.Fprintf(w, "\nundeclared: the code imports %s, which only dev dependencies provide (%s) - it will fail in production\n",
-				u.Module, strings.Join(u.Via, " → "))
-		} else {
-			fmt.Fprintf(w, "\nundeclared: the code imports %s (package %s) without depending on it - it's only there via %s, so removing that breaks it\n",
-				u.Module, u.Package, strings.Join(u.Via, " → "))
-		}
+	if listed {
+		fmt.Fprintf(w, "\n* native code   (n) past advisories   ? no wheel for %s %s - probably not installed there\n",
+			r.Target.OS, r.Target.Arch)
 	}
+
+	writeUndeclared(w, r.Undeclared, width)
 
 	return nil
+}
+
+// usedSummary is how the project uses a dependency: names imported, and whether it runs
+// one of its commands.
+func usedSummary(s Surface) string {
+	var parts []string
+
+	if len(s.UsedNames) > 0 {
+		parts = append(parts, plural(len(s.UsedNames), "name"))
+	}
+
+	if s.Command {
+		parts = append(parts, "command")
+	}
+
+	if len(parts) == 0 {
+		return "-"
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+// writeUndeclared lists imports the project makes without depending on the package.
+func writeUndeclared(w io.Writer, undeclared []Undeclared, width int) {
+	if len(undeclared) == 0 {
+		return
+	}
+
+	fmt.Fprint(w, "\n"+wrap("Undeclared imports - declare them, or removing what brings them in breaks the code:",
+		"", width))
+
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+
+	for _, u := range undeclared {
+		name := u.Package
+		if NormalizeName(u.Module) != NormalizeName(u.Package) {
+			name = u.Module + " (" + u.Package + ")"
+		}
+
+		where := "via " + strings.Join(u.Via, " → ")
+		if u.DevOnly {
+			where = "only dev dependencies provide it (" + strings.Join(u.Via, " → ") + ") - fails in production"
+		}
+
+		fmt.Fprintf(tw, "  %s\t%s\n", name, where)
+	}
+
+	_ = tw.Flush()
 }
 
 func formatSize(s Surface) string {
@@ -466,8 +533,12 @@ func packageList(packages []SurfacePackage) string {
 	parts := make([]string, len(packages))
 	for i, p := range packages {
 		parts[i] = p.Name
-		if p.Native == "yes" {
+
+		switch p.Native {
+		case "yes":
 			parts[i] += "*"
+		case "unknown":
+			parts[i] += "?"
 		}
 
 		if p.Advisories > 0 {
@@ -475,5 +546,5 @@ func packageList(packages []SurfacePackage) string {
 		}
 	}
 
-	return strings.Join(parts, ", ") + "   [* native code, (n) past advisories]"
+	return strings.Join(parts, ", ")
 }

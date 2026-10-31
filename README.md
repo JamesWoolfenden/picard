@@ -170,15 +170,20 @@ pan, with its test coverage:
 ```text
 pan ships 88 packages (linux x86_64, Python 3.12). What each direct dependency alone brings in:
 
-DEPENDENCY                      PACKAGES  NATIVE  SIZE        PAST ADVISORIES  NAMES USED   FUNCTIONS CALLED
-sentence-transformers (+torch)  26        6       >= 35.5 MB  178              2            1748
-librosa                         12        5       65.0 MB     3                1            6
-anthropic                       8         1       2.5 MB      16               1            13
-uvicorn                         5         4       5.9 MB      8                0 + command  0
+DEPENDENCY                      PACKAGES  NATIVE  SIZE        PAST ADVISORIES  USED     FUNCTIONS CALLED
+sentence-transformers (+torch)  26        6       >= 35.5 MB  178              2 names  1748
+librosa                         12        5       65.0 MB     3                1 name   6
+anthropic                       8         1       2.5 MB      16               1 name   13
+uvicorn                         5         4       5.9 MB      8                command  0
 ...
-undeclared: the code imports httpx (package httpx) without depending on it - it's only
-there via sentence-transformers → huggingface-hub → httpx, so removing that breaks it
+
+Undeclared imports - declare them, or removing what brings them in breaks the code:
+  httpx  via sentence-transformers → huggingface-hub → httpx
 ```
+
+Then, per dependency, what it brings in (`cryptography*(42)`: native code, 42 past
+advisories; `pywin32?`: no wheel for the target platform, so probably not installed there)
+and the names the code uses from it.
 
 - **Groups** - a direct dependency only another one needs goes with it: pan lists torch
   directly, but it's only there for sentence-transformers, so they're costed together.
