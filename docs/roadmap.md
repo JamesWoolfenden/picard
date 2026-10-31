@@ -39,7 +39,8 @@ stack.
 ## More ecosystems and lock files
 
 - Python: `poetry.lock`, `requirements.txt` with hashes, `pdm.lock`.
-- Go (`go.sum` + `govulncheck`-style symbol data, which Go advisories already carry).
+- Go: done for `go.mod`, with package-level reachability from `go list -deps`. Still to do:
+  symbol-level reachability (govulncheck's call graph), and the actual toolchain version.
 - npm: coverage evidence (v8 / vitest coverage), `surface`, and `npm audit`-style fix paths. Basic `scan` of `package-lock.json` is done.
 
 ## Platform markers

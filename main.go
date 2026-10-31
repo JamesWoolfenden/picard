@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,7 +50,7 @@ func main() {
 					},
 					&cli.StringFlag{
 						Name:  "lock",
-						Usage: "lock file (default: <directory>/uv.lock)",
+						Usage: "lock file (default: the directory's uv.lock, package-lock.json or go.mod)",
 					},
 					&cli.StringFlag{
 						Name:    "coverage",
@@ -70,6 +71,14 @@ func main() {
 					}
 
 					report, err := core.Scan(opts)
+
+					var noLock *core.NoLockFileError
+					if errors.As(err, &noLock) {
+						fmt.Fprintln(os.Stderr, noLock.Error()+" - nothing to scan")
+
+						return nil
+					}
+
 					if err != nil {
 						return err
 					}

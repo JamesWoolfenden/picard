@@ -178,8 +178,12 @@ func (t *PRTriage) compare(gh *GitHub, api, dir string, pr PullRequest, scan Opt
 func prLocks(dir string, files []string) (locks, unread, stale []string) {
 	for _, f := range files {
 		switch path.Base(f) {
-		case "uv.lock", "package-lock.json":
+		case "uv.lock", "package-lock.json", "go.mod":
 			locks = append(locks, f)
+		case "go.sum": // compared through go.mod, which a Go dependency PR always changes
+			if !containsFile(files, path.Join(path.Dir(f), "go.mod")) {
+				unread = append(unread, f)
+			}
 		case "pyproject.toml", "package.json":
 			lock := path.Join(path.Dir(f), map[string]string{"pyproject.toml": "uv.lock", "package.json": "package-lock.json"}[path.Base(f)])
 

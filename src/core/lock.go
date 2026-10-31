@@ -49,6 +49,9 @@ type Lock struct {
 	// Direct are the project's own runtime dependencies; DevDirect its dev-group ones.
 	Direct    []string
 	DevDirect []string
+	// Compiled are the import paths the build compiles in (Go, from go list -deps across
+	// platforms), or nil when unknown.
+	Compiled map[string]bool
 	// Bundler names the bundler the project builds with (npm), or "". A bundler copies
 	// whatever the code reaches into its output, so a dev dependency may ship after all.
 	Bundler string

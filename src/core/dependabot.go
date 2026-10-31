@@ -72,7 +72,7 @@ func PlanDependabot(gh *GitHub, opts DependabotOptions) ([]AlertDecision, error)
 		if lock == "" {
 			decisions = append(decisions, AlertDecision{
 				Alert: a, Action: ActionSkip,
-				Reason: "picard reads uv.lock and package-lock.json; this alert is on " + a.Dependency.ManifestPath,
+				Reason: "picard reads " + strings.Join(LockFiles, ", ") + "; this alert is on " + a.Dependency.ManifestPath,
 			})
 
 			continue
@@ -127,8 +127,12 @@ func lockForManifest(root, manifest string) string {
 	dir := path.Dir(manifest)
 
 	switch path.Base(manifest) {
-	case "uv.lock", "package-lock.json":
+	case "uv.lock", "package-lock.json", "go.mod":
 		return filepath.Join(root, filepath.FromSlash(manifest))
+	case "go.sum":
+		if lock := filepath.Join(root, filepath.FromSlash(dir), "go.mod"); Exists(lock) {
+			return lock
+		}
 	case "pyproject.toml":
 		if lock := filepath.Join(root, filepath.FromSlash(dir), "uv.lock"); Exists(lock) {
 			return lock

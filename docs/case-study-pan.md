@@ -33,6 +33,7 @@ exactly the kind of confident shortcut a triage tool should replace with evidenc
 
 ```text
 pan: 20 advisories across 3 packages - 3 upgrade(s) fix all of them
+(output at the time - picard has since merged certifi's duplicate PYSEC record, so it reports 19)
 
 VERDICT  PACKAGE     VERSION    FIX         SEVERITY  ALERTS  IMPORTED  EXECUTED
 shipped  certifi     2026.7.22  2026.10.19  critical  2       no        unknown

@@ -27,6 +27,11 @@ type Advisory struct {
 	Fixed string `json:"fixed,omitempty"`
 	// FixRefs are the advisory's FIX references - usually the commit or pull request.
 	FixRefs []string `json:"fix_refs,omitempty"`
+	// AffectedPackages are the import paths the advisory names as vulnerable (Go advisories
+	// do); Compiled, those the build compiles in, when CompiledKnown.
+	AffectedPackages []string `json:"affected_packages,omitempty"`
+	Compiled         []string `json:"compiled,omitempty"`
+	CompiledKnown    bool     `json:"compiled_known,omitempty"`
 	// Assessment, Verdict and Reason are this advisory's own triage (see Triage); the
 	// Finding carries the package-level summary.
 	Assessment *Assessment `json:"assessment,omitempty"`
@@ -66,6 +71,11 @@ type osvVuln struct {
 		Ranges []struct {
 			Events []map[string]string `json:"events"`
 		} `json:"ranges"`
+		EcosystemSpecific struct {
+			Imports []struct {
+				Path string `json:"path"`
+			} `json:"imports"`
+		} `json:"ecosystem_specific"`
 	} `json:"affected"`
 	DatabaseSpecific struct {
 		Severity string `json:"severity"`
@@ -154,7 +164,98 @@ func (o *OSV) Query(ecosystem string, packages []*Package) (map[string][]Advisor
 		}
 	}
 
+	for name, advs := range result {
+		result[name] = mergeAliases(advs)
+	}
+
 	return result, nil
+}
+
+// mergeAliases folds advisories that are the same vulnerability - OSV returns GitHub's
+// record and the ecosystem's own (PYSEC-, GO-) side by side, aliasing each other - into
+// one, so a vulnerability counts once, as Dependabot counts it. The GitHub id is kept as
+// the id, the others become aliases; the highest severity and every fix reference are kept.
+func mergeAliases(advs []Advisory) []Advisory {
+	group := make([]int, len(advs)) // index of each advisory's group leader
+	byName := map[string]int{}
+
+	var find func(int) int
+	find = func(i int) int {
+		for group[i] != i {
+			i = group[i]
+		}
+
+		return i
+	}
+
+	for i, a := range advs {
+		group[i] = i
+
+		for _, name := range append([]string{a.ID}, a.Aliases...) {
+			if j, ok := byName[name]; ok {
+				group[find(i)] = find(j)
+			} else {
+				byName[name] = i
+			}
+		}
+	}
+
+	merged := map[int]*Advisory{}
+
+	var order []int
+
+	for i := range advs {
+		leader := find(i)
+
+		m, ok := merged[leader]
+		if !ok {
+			c := advs[i]
+			merged[leader], order = &c, append(order, leader)
+
+			continue
+		}
+
+		m.absorb(advs[i])
+	}
+
+	out := make([]Advisory, 0, len(order))
+	for _, leader := range order {
+		out = append(out, *merged[leader])
+	}
+
+	return out
+}
+
+// absorb merges another record of the same vulnerability into a.
+func (a *Advisory) absorb(b Advisory) {
+	if !strings.HasPrefix(a.ID, "GHSA-") && strings.HasPrefix(b.ID, "GHSA-") {
+		a.ID, b.ID = b.ID, a.ID
+		a.Summary, a.Details = firstNonEmpty(b.Summary, a.Summary), firstNonEmpty(b.Details, a.Details)
+	}
+
+	names := map[string]bool{a.ID: true}
+
+	var aliases []string
+
+	for _, n := range append(append(append([]string(nil), a.Aliases...), b.ID), b.Aliases...) {
+		if !names[n] {
+			names[n] = true
+			aliases = append(aliases, n)
+		}
+	}
+
+	a.Aliases = aliases
+
+	if severityRank[b.Severity] > severityRank[a.Severity] {
+		a.Severity = b.Severity
+	}
+
+	if b.Fixed != "" && (a.Fixed == "" || CompareVersions(b.Fixed, a.Fixed) < 0) {
+		a.Fixed = b.Fixed
+	}
+
+	a.FixRefs = mergeNames(a.FixRefs, b.FixRefs)
+	a.AffectedPackages = mergeNames(a.AffectedPackages, b.AffectedPackages)
 }
 
 // History counts every advisory ever published against each package, at any version - a
@@ -257,9 +358,9 @@ func (o *OSV) post(path string, body any, into any) error {
 }
 
 // sameName compares an advisory's package name with a lock's: PyPI names are normalized
-// (PEP 503), npm names are case-sensitive and compared as they are.
+// (PEP 503); npm names and Go module paths are case-sensitive and compared as they are.
 func sameName(ecosystem, a, b string) bool {
-	if ecosystem == EcosystemNPM {
+	if ecosystem == EcosystemNPM || ecosystem == EcosystemGo {
 		return a == b
 	}
 
@@ -292,6 +393,10 @@ func toAdvisory(v *osvVuln, ecosystem, name, version string) Advisory {
 	for _, aff := range v.Affected {
 		if !sameName(ecosystem, aff.Package.Name, name) {
 			continue
+		}
+
+		for _, imp := range aff.EcosystemSpecific.Imports {
+			a.AffectedPackages = mergeNames(a.AffectedPackages, []string{imp.Path})
 		}
 
 		for _, r := range aff.Ranges {

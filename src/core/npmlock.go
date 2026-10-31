@@ -53,7 +53,9 @@ func ReadNPMLock(path string) (*Lock, error) {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
 
-	if raw.LockfileVersion < 2 || len(raw.Packages) == 0 {
+	// A missing packages map is the old format; an empty one is a project without
+	// dependencies.
+	if raw.LockfileVersion < 2 || raw.Packages == nil {
 		return nil, fmt.Errorf("%s: lockfileVersion %d has no packages map - regenerate it with npm 7 or later",
 			path, raw.LockfileVersion)
 	}

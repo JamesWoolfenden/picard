@@ -11,12 +11,14 @@ Named for Jean-Luc Picard: weigh the reports, decide, make it so.
 
 ## What it checks
 
-For a [uv](https://docs.astral.sh/uv/) project (`uv.lock`), or an npm project
-(`package-lock.json`, with fewer checks - see Limitations):
+For a [uv](https://docs.astral.sh/uv/) project (`uv.lock`), an npm project
+(`package-lock.json`) or a Go module (`go.mod`) - npm and Go with fewer checks, see
+Limitations:
 
 1. **Advisories** - looks up every locked package version in [OSV](https://osv.dev) (the
-   same GitHub advisory data Dependabot uses, plus PyPI's), and groups them by the upgrade
-   that fixes them: 19 alerts is often 3 upgrades.
+   same GitHub advisory data Dependabot uses, plus PyPI's and Go's), and groups them by the
+   upgrade that fixes them: 19 alerts is often 3 upgrades. Records of the same
+   vulnerability from different databases (`GHSA-…` and `PYSEC-…` / `GO-…`) count once.
 2. **Shipped** - walks the lock file's dependency graph from the project's runtime
    dependencies (not its dev groups) and reports the chain that pulls each package in
    (`torch → filelock`).
@@ -80,16 +82,16 @@ Package evidence only, from its test suite's coverage - note how wrong this rank
 VERDICT      PACKAGE     VERSION    FIX         SEVERITY  ADVISORIES  IMPORTED  EXECUTED
 reachable    filelock    4.1.0      4.2.1       high      17      no        yes
 reachable    setuptools  84.0.0     84.1.0      low       1       no        yes
-import-only  certifi     2026.7.22  2026.10.19  critical  2       no        yes
+import-only  certifi     2026.7.22  2026.10.19  critical  1       no        yes
 ```
 
 With `--assess` and pan's `picard.yaml`:
 
 ```text
-pan: 20 advisories across 3 packages - 3 upgrade(s) fix all of them
+pan: 19 advisories across 3 packages - 3 upgrades fix all of them
 
 VERDICT         PACKAGE     VERSION    FIX         SEVERITY  ADVISORIES  IMPORTED  EXECUTED
-reachable       certifi     2026.7.22  2026.10.19  critical  2       no        yes
+reachable       certifi     2026.7.22  2026.10.19  critical  1       no        yes
 not-applicable  filelock    4.1.0      4.2.1       high      17      no        yes
 not-applicable  setuptools  84.0.0     84.1.0      low       1       no        yes
 
@@ -274,9 +276,17 @@ The VEX output is a *proposal* to review, not a decision: commit it once you agr
   `devDependencies`) and whether your own non-test JS/TS imports it. When the project builds
   with a bundler (esbuild, webpack, vite, rollup, Next.js and the like, as a dependency or
   run by a `package.json` script), a dev-only package the code's imports reach is in the
-  bundle, so it counts as shipped; `--coverage`, `--assess`
-  and `surface` are Python-only for now. A package locked at several versions has each
-  looked up.
+  bundle, so it counts as shipped. A package locked at several versions has each looked up.
+- Go: `go.mod` is the build list (replacements applied), plus the **standard library** at
+  the `toolchain` or `go` line's version - Dependabot never alerts on stdlib, OSV does. That
+  version is a minimum; the Go that builds the binary may be newer. What ships comes from
+  `go list -deps ./...` (the non-test build, so test-only modules don't ship), run for
+  linux/amd64 (with and without cgo), linux/arm64, darwin/arm64 and windows/amd64 and
+  combined, so build tags can't hide a package. Go advisories name the affected packages,
+  so an advisory whose packages the build compiles in on no platform is `not-shipped` - a
+  fact; whether vulnerable *functions* are called needs govulncheck. Without a working
+  `go` command, every required module counts as shipped.
+- `--coverage`, `--assess` and `surface` are Python-only for now.
 
 ## Further reading
 

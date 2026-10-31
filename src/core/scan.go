@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -34,6 +35,9 @@ const assessConcurrency = 4
 // Scan runs every check against a project and returns the triaged report.
 func Scan(opts Options) (*Report, error) {
 	lockFile := resolveLockFile(opts)
+	if lockFile == "" {
+		return nil, &NoLockFileError{Directory: opts.Directory}
+	}
 
 	var (
 		lock     *Lock
@@ -43,7 +47,20 @@ func Scan(opts Options) (*Report, error) {
 		executed map[string]*ModuleUse
 	)
 
-	if filepath.Base(lockFile) == "package-lock.json" {
+	switch filepath.Base(lockFile) {
+	case "go.mod":
+		if opts.Coverage != "" {
+			return nil, fmt.Errorf("--coverage is a coverage.py report: it doesn't apply to go.mod")
+		}
+
+		if lock, err = ReadGoMod(lockFile, opts.Directory); err != nil {
+			return nil, err
+		}
+
+		if imported, err = ScanGoImports(opts.Directory, lock); err != nil {
+			return nil, fmt.Errorf("scanning imports: %w", err)
+		}
+	case "package-lock.json":
 		if opts.Coverage != "" {
 			return nil, fmt.Errorf("--coverage is a coverage.py report: it doesn't apply to an npm lock")
 		}
@@ -58,7 +75,7 @@ func Scan(opts Options) (*Report, error) {
 		}
 
 		imported = imports.Production
-	} else {
+	default:
 		if lock, err = ReadUVLock(lockFile); err != nil {
 			return nil, err
 		}
@@ -110,22 +127,30 @@ func Scan(opts Options) (*Report, error) {
 	return &Report{Project: lock.Project, Ecosystem: lock.Ecosystem, Findings: findings}, nil
 }
 
-// resolveLockFile is the lock file to scan: the one given, else uv.lock, else (for a
-// JavaScript project) package-lock.json. uv.lock is the default when neither exists, so the
-// error names it.
+// LockFiles are the files picard reads, in the order it looks for them.
+var LockFiles = []string{"uv.lock", "package-lock.json", "go.mod"}
+
+// NoLockFileError: the directory has none of the lock files picard reads.
+type NoLockFileError struct{ Directory string }
+
+func (e *NoLockFileError) Error() string {
+	return fmt.Sprintf("%s has no lock file picard reads (%s)", e.Directory, strings.Join(LockFiles, ", "))
+}
+
+// resolveLockFile is the lock file to scan: the one given, else the first of LockFiles in
+// the directory, else "".
 func resolveLockFile(opts Options) string {
 	if opts.LockFile != "" {
 		return opts.LockFile
 	}
 
-	uv := filepath.Join(opts.Directory, "uv.lock")
-	npm := filepath.Join(opts.Directory, "package-lock.json")
-
-	if !Exists(uv) && Exists(npm) {
-		return npm
+	for _, name := range LockFiles {
+		if path := filepath.Join(opts.Directory, name); Exists(path) {
+			return path
+		}
 	}
 
-	return uv
+	return ""
 }
 
 // assess attaches an assessment to every advisory of every shipped package - those not

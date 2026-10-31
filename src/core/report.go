@@ -22,9 +22,13 @@ type Report struct {
 // one is given. Scoped npm names carry their "@" percent-encoded.
 func (r Report) purl(name, version string) string {
 	kind := "pypi"
-	if r.Ecosystem == EcosystemNPM {
+
+	switch r.Ecosystem {
+	case EcosystemNPM:
 		kind = "npm"
 		name = strings.Replace(name, "@", "%40", 1)
+	case EcosystemGo:
+		kind = "golang"
 	}
 
 	if version == "" {
@@ -62,13 +66,15 @@ func (r Report) WriteTable(w io.Writer) error {
 		coverage = coverage || f.Executed != UseUnknown
 	}
 
-	upgrades := plural(fixable, "upgrade") + " fix all of them"
+	unfixed := len(r.Findings) - fixable
+
+	upgrades := plural(fixable, "upgrade") + " " + verb(fixable, "fixes", "fix") + " all of them"
 	switch {
 	case fixable == 0:
 		upgrades = "no fixed versions yet"
-	case fixable < len(r.Findings):
-		upgrades = fmt.Sprintf("%s fix %d; %d have no fixed version yet", plural(fixable, "upgrade"),
-			fixable, len(r.Findings)-fixable)
+	case unfixed > 0:
+		upgrades = fmt.Sprintf("%s %s %d; %d %s no fixed version yet", plural(fixable, "upgrade"),
+			verb(fixable, "fixes", "fix"), fixable, unfixed, verb(unfixed, "has", "have"))
 	}
 
 	fmt.Fprintf(w, "%s: %s across %s - %s\n\n", r.Project, plural(r.AlertCount(), "advisory"),

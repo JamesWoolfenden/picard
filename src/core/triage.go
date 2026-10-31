@@ -137,6 +137,23 @@ func Triage(advisories map[string][]Advisory, ev Evidence) []Finding {
 
 		f.DirectImport = ev.Imported[name]
 
+		if ev.Lock.Compiled != nil {
+			for j := range f.Advisories {
+				a := &f.Advisories[j]
+				if len(a.AffectedPackages) == 0 {
+					continue
+				}
+
+				a.CompiledKnown, a.Compiled = true, nil
+
+				for _, p := range a.AffectedPackages {
+					if ev.Lock.Compiled[p] {
+						a.Compiled = append(a.Compiled, p)
+					}
+				}
+			}
+		}
+
 		if ev.Executed != nil {
 			f.Executed = UseNo
 
@@ -254,6 +271,17 @@ func judgePackage(f Finding) (Verdict, string) {
 // one: preconditions that don't hold, data every user of the package consumes, or the
 // specific affected functions checked against what actually ran.
 func judgeAdvisory(f Finding, a Advisory, pkgVerdict Verdict, pkgReason string) (Verdict, string) {
+	// Which of the vulnerable packages the build compiles in is a fact, so it comes first.
+	if f.Shipped && a.CompiledKnown && len(a.Compiled) == 0 {
+		return VerdictNotShipped, "only " + strings.Join(firstN(a.AffectedPackages, 3), ", ") +
+			" affected, and the build compiles none of them in (go list -deps, across platforms)"
+	}
+
+	if f.Shipped && a.CompiledKnown && a.Assessment == nil && pkgVerdict != VerdictReachable {
+		return VerdictShipped, "the build compiles in the affected " + strings.Join(firstN(a.Compiled, 3), ", ") +
+			" - whether the vulnerable functions are called needs govulncheck"
+	}
+
 	as := a.Assessment
 	if !f.Shipped || as == nil {
 		return pkgVerdict, pkgReason

@@ -36,7 +36,16 @@ and record it in a standard format, with every verdict carrying the reason it re
 Every locked package version is sent to [OSV](https://osv.dev)'s batch API, then each
 advisory is fetched for its summary, details, severity, fix versions and references.
 OSV aggregates GitHub's advisories (what Dependabot uses) and PyPI's, so it sees at least
-what Dependabot does - on pan it found 20 against Dependabot's 19.
+what Dependabot does. Each database files its own record of a vulnerability (`GHSA-…`
+alongside `PYSEC-…` or `GO-…`), aliasing the others; picard merges records that alias each
+other into one advisory, keeping the GitHub id, so pan's count is Dependabot's 19 rather
+than 20 (certifi's PYSEC record had been counted twice).
+
+For Go, OSV also covers the standard library (package `stdlib`), which Dependabot doesn't,
+and its advisories name the affected import paths. picard compares them with what
+`go list -deps ./...` compiles in - on five platform/cgo combinations, combined, so a build
+tag can't hide a package - and an advisory none of whose packages is compiled in anywhere
+is `not-shipped`, as a fact.
 
 The fix version per advisory is the lowest fixed version above the locked one; per package,
 the highest of those - the one upgrade that closes them all.

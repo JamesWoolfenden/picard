@@ -65,6 +65,15 @@ func plural(n int, word string) string {
 	}
 }
 
+// verb picks the singular or plural form for a count: verb(1, "fixes", "fix").
+func verb(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+
+	return many
+}
+
 // numberRanges writes alert numbers compactly: #3-8, #10-20.
 func numberRanges(numbers []int) string {
 	sorted := append([]int(nil), numbers...)
