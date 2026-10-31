@@ -188,6 +188,14 @@ Alerts of one package with the same proposal are one row (`filelock #3-8, #10-20
 a reason shared by all of them is written once, and judged ones list each alert's own
 reasoning, since that's what you're signing off with `--apply-judged`.
 
+### The judgement: `/picard-triage`
+
+picard reports facts; some decisions need judgement - is a major bump safe for this code,
+do an advisory's preconditions hold here. The [`picard-triage`](skills/README.md) Claude
+Code skill runs `picard dependabot --prs`, investigates those (release notes against the
+names the code uses, tests on the PR branch, the reasoning behind judged verdicts), proposes
+a plan, and carries out each merge, close, dismissal or setting change on your confirmation.
+
 ## Surface: what each dependency costs
 
 Triage makes alerts cheaper; `picard surface` is for having fewer of them. For each direct

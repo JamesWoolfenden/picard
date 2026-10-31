@@ -30,7 +30,12 @@ Module path: `github.com/jameswoolfenden/picard`
   `--state fixed --lock <old lock>`.
 - `surface.go`, `surface_scan.go` - `picard surface`: what each direct dependency alone
   brings in (packages, native code, size, advisory history, use) and undeclared imports
+- `settings.go`, `prs.go` - `picard dependabot`'s setup checks and `--prs` (each PR's locks
+  scanned at base and head)
 - `scan.go` - wires it together
+
+`skills/picard-triage` is the judgement layer on top (a Claude Code skill): picard stays
+deterministic; anything needing judgement - merge safety, preconditions - belongs there.
 
 ## Working in this repo
 
