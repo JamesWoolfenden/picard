@@ -31,7 +31,11 @@ type PullRequest struct {
 	} `json:"user"`
 	Head struct {
 		Ref string `json:"ref"`
+		SHA string `json:"sha"`
 	} `json:"head"`
+	Base struct {
+		SHA string `json:"sha"`
+	} `json:"base"`
 	// Security: it updates a package with an open alert, rather than being a routine
 	// version bump.
 	Security bool `json:"security"`

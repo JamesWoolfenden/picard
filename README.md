@@ -135,6 +135,34 @@ about). Each problem comes with the command or config change that fixes it, and 
 Dependabot PRs are labelled security fix or version bump. Pinning is
 [ghat](https://github.com/JamesWoolfenden/ghat)'s job, so it isn't checked here.
 
+`--prs` reads Dependabot's open pull requests too. For each one, picard scans every lock it
+changes at the PR's base and head commits and compares the advisories, and reports CI and
+whether it's a major version bump:
+
+| Class | Meaning |
+|---|---|
+| `fixes-shipped` | removes an advisory against a package that ships - merge it |
+| `fixes-dev-only` | removes advisories, but only against packages that don't ship |
+| `adds-advisory` | the new versions have advisories the old ones didn't |
+| `fixes-nothing` | a routine bump |
+| `no-install-change` | can't change what's installed: a `>=` floor raised in an unpinned requirements file, or a manifest whose lock the PR leaves alone |
+| `unknown` | changes files picard can't compare |
+
+```text
+PR   PACKAGE    CHANGE                      CI       WHAT IT DOES
+#40  tzdata     >=2026.5 → >=2026.6         passing  no-install-change
+#38  firebase   13.0.0 → 13.1.0             passing  fixes-shipped
+#37  anthropic  >=1.13.0 → >=2.3.0 (major)  passing  no-install-change
+#36  ruff       0.17.0 → 0.17.3             passing  no-install-change
+
+#38 Bump firebase from 13.0.0 to 13.1.0 in /ui
+  removes 1 advisory against shipped packages: re2js 2.8.6 GHSA-gg6h-894w-4m9c (high)
+```
+
+That #38 is a version update, not a security one - GitHub had no alert for re2js - is why
+it's worth reading version PRs at all. These are facts only; whether a bump is *safe* to
+merge (breaking changes, release notes, tests) is judgement, left to review.
+
 Needs a GitHub token (`GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`); dismissing needs
 write access to Dependabot alerts. `--state fixed --lock old/uv.lock` replays past alerts
 against an old lock, for checking picard's proposals against decisions already made.

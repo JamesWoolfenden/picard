@@ -97,6 +97,7 @@ func main() {
 					&cli.StringFlag{Name: "state", Usage: "alerts to process: open, fixed, dismissed (fixed + --lock replays past alerts)", Value: "open"},
 					&cli.StringFlag{Name: "lock", Usage: "use this lock file for every alert instead of the checkout's (replaying past alerts)"},
 					&cli.StringFlag{Name: "coverage", Aliases: []string{"c"}, Usage: "coverage.py JSON report for the Python lock"},
+					&cli.BoolFlag{Name: "prs", Usage: "also read each open Dependabot PR: which advisories its lock change removes or adds, CI, major bumps"},
 					&cli.BoolFlag{Name: "apply", Usage: "dismiss alerts whose verdict rests on facts alone (not shipped)"},
 					&cli.BoolFlag{Name: "apply-judged", Usage: "also dismiss alerts whose verdict rests on coverage or a model's assessment"},
 					&cli.StringFlag{Name: "format", Aliases: []string{"f"}, Usage: "output format: table or json", Value: "table"},
@@ -135,6 +136,13 @@ func main() {
 						return err
 					}
 
+					var prs []core.PRTriage
+					if c.Bool("prs") {
+						if prs, err = core.TriagePRs(gh, repo, opts.Directory, settings.PRs, opts); err != nil {
+							return err
+						}
+					}
+
 					var applyErr error
 					if c.Bool("apply") || c.Bool("apply-judged") {
 						applyErr = core.ApplyDecisions(gh, repo, decisions, c.Bool("apply-judged"))
@@ -145,7 +153,7 @@ func main() {
 						enc := json.NewEncoder(os.Stdout)
 						enc.SetIndent("", "  ")
 
-						if err := enc.Encode(map[string]any{"settings": settings, "alerts": decisions}); err != nil {
+						if err := enc.Encode(map[string]any{"settings": settings, "alerts": decisions, "pull_requests": prs}); err != nil {
 							return err
 						}
 					case "table":
@@ -153,6 +161,14 @@ func main() {
 
 						if err := core.WriteDecisions(os.Stdout, repo, decisions); err != nil {
 							return err
+						}
+
+						if c.Bool("prs") {
+							fmt.Println()
+
+							if err := core.WritePRs(os.Stdout, repo, prs); err != nil {
+								return err
+							}
 						}
 					default:
 						return fmt.Errorf("unknown format %q (table or json)", c.String("format"))
