@@ -49,6 +49,9 @@ type Lock struct {
 	// Direct are the project's own runtime dependencies; DevDirect its dev-group ones.
 	Direct    []string
 	DevDirect []string
+	// Bundler names the bundler the project builds with (npm), or "". A bundler copies
+	// whatever the code reaches into its output, so a dev dependency may ship after all.
+	Bundler string
 	// MinPython is the lowest Python the lock supports ("3.12" from requires-python
 	// ">=3.12"), or "".
 	MinPython string

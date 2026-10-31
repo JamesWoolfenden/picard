@@ -48,6 +48,12 @@ dependencies and dev groups. A breadth-first walk from the runtime dependencies 
 production closure, and for each package the shortest chain that pulls it in
 (`plexapi → requests → certifi`). Anything reachable only from dev groups is not shipped.
 
+For npm, "dev dependency" only means "doesn't ship" when nothing bundles the build. If the
+project's own dependencies include a bundler (esbuild, webpack, vite, rollup, Next.js, ...),
+whatever the code reaches is copied into the output regardless of how it was declared, so
+dev-only packages are treated as shipped, with the bundler named in the reason. Only direct
+dependencies count - vitest pulling in vite for its own use doesn't bundle the project.
+
 Platform markers are ignored, deliberately: a Windows-only dependency counts as shipped.
 That can over-report, never under-report.
 

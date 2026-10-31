@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -231,38 +232,7 @@ func TestScanNPMProjectJudgesDevOnlyAdvisoryNotShipped(t *testing.T) {
 		"src/index.jsx":     `import React from 'react';`,
 	})
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/querybatch":
-			var body struct {
-				Queries []osvQuery `json:"queries"`
-			}
-
-			_ = json.NewDecoder(r.Body).Decode(&body)
-
-			results := make([]any, len(body.Queries))
-			for i, q := range body.Queries {
-				results[i] = map[string]any{}
-				if q.Package.Name == "uuid" {
-					results[i] = map[string]any{"vulns": []any{map[string]string{"id": "GHSA-uuid"}}}
-				}
-			}
-
-			_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
-		case "/v1/vulns/GHSA-uuid":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id":                "GHSA-uuid",
-				"summary":           "Missing buffer bounds check",
-				"database_specific": map[string]string{"severity": "MODERATE"},
-				"affected": []any{map[string]any{
-					"package": map[string]string{"name": "uuid", "ecosystem": "npm"},
-					"ranges":  []any{map[string]any{"events": []map[string]string{{"introduced": "0"}, {"fixed": "11.1.1"}}}},
-				}},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
+	server := uuidOSV()
 	defer server.Close()
 
 	report, err := Scan(Options{Directory: root, OSV: &OSV{BaseURL: server.URL, Client: server.Client()}})
@@ -301,4 +271,89 @@ func TestScanRejectsCoverageForAnNPMLock(t *testing.T) {
 	if _, err := Scan(Options{Directory: root, Coverage: "coverage.json"}); err == nil {
 		t.Error("a coverage.py report with an npm lock should be an error")
 	}
+}
+
+// With a bundler among the project's own dependencies, a dev-only package may be copied into
+// the bundle, so it's shipped - never a not-shipped that `--apply` would dismiss.
+func TestScanNPMProjectWithABundlerKeepsDevOnlyAdvisoryShipped(t *testing.T) {
+	root := t.TempDir()
+
+	lock, err := os.ReadFile("testdata/ui-package-lock.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bundled := strings.Replace(string(lock), `"devDependencies": { "vitest": "^1.0.0" }`,
+		`"devDependencies": { "vitest": "^1.0.0", "esbuild": "^0.24.0" }`, 1)
+
+	writeFiles(t, root, map[string]string{"package-lock.json": bundled})
+
+	server := uuidOSV()
+	defer server.Close()
+
+	report, err := Scan(Options{Directory: root, OSV: &OSV{BaseURL: server.URL, Client: server.Client()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(report.Findings) != 1 {
+		t.Fatalf("report = %+v", report)
+	}
+
+	f := report.Findings[0]
+	if !f.Shipped || f.Bundled != "esbuild" || f.Verdict != VerdictShipped {
+		t.Errorf("finding = %+v", f)
+	}
+}
+
+func TestFindBundlerOnlyCountsDirectDependencies(t *testing.T) {
+	// The fixture's vitest would pull in vite in real life; only direct ones count.
+	lock, err := ReadNPMLock("testdata/ui-package-lock.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if lock.Bundler != "" {
+		t.Errorf("bundler = %q, want none", lock.Bundler)
+	}
+
+	if got := findBundler([]string{"react", "next"}); got != "next" {
+		t.Errorf("findBundler = %q, want next", got)
+	}
+}
+
+// uuidOSV is an OSV stub with one advisory, against uuid.
+func uuidOSV() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/querybatch":
+			var body struct {
+				Queries []osvQuery `json:"queries"`
+			}
+
+			_ = json.NewDecoder(r.Body).Decode(&body)
+
+			results := make([]any, len(body.Queries))
+			for i, q := range body.Queries {
+				results[i] = map[string]any{}
+				if q.Package.Name == "uuid" {
+					results[i] = map[string]any{"vulns": []any{map[string]string{"id": "GHSA-uuid"}}}
+				}
+			}
+
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+		case "/v1/vulns/GHSA-uuid":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":                "GHSA-uuid",
+				"summary":           "Missing buffer bounds check",
+				"database_specific": map[string]string{"severity": "MODERATE"},
+				"affected": []any{map[string]any{
+					"package": map[string]string{"name": "uuid", "ecosystem": "npm"},
+					"ranges":  []any{map[string]any{"events": []map[string]string{{"introduced": "0"}, {"fixed": "11.1.1"}}}},
+				}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
 }

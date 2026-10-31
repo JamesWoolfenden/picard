@@ -165,9 +165,13 @@ func symbolCovers(symbol, module, qualname string) bool {
 func describeEvidence(f Finding) string {
 	var b strings.Builder
 
-	if f.Shipped {
+	switch {
+	case f.Bundled != "":
+		fmt.Fprintf(&b, "Only dev dependencies pull it in (%s), but the project builds with %s, which may copy it into what ships.\n",
+			strings.Join(f.Via, " -> "), f.Bundled)
+	case f.Shipped:
 		fmt.Fprintf(&b, "Shipped in the production install, pulled in via %s.\n", strings.Join(f.Via, " -> "))
-	} else {
+	default:
 		fmt.Fprintf(&b, "Not shipped - only dev/test dependencies pull it in (%s).\n", strings.Join(f.Via, " -> "))
 	}
 

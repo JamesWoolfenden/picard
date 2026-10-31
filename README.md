@@ -214,7 +214,10 @@ The VEX output is a *proposal* to review, not a decision: commit it once you agr
   shipped. Conservative, never under-reports.
 - Lock files: `uv.lock` and npm's `package-lock.json` (lockfileVersion 2 or 3). For npm,
   picard checks advisories, whether each package ships (runtime `dependencies` vs
-  `devDependencies`) and whether your own non-test JS/TS imports it; `--coverage`, `--assess`
+  `devDependencies`) and whether your own non-test JS/TS imports it. When the project builds
+  with a bundler (esbuild, webpack, vite, rollup, Next.js and the like among its own
+  dependencies), dev dependencies can end up in the bundle, so dev-only packages count as
+  `shipped`, not `not-shipped`; `--coverage`, `--assess`
   and `surface` are Python-only for now. A package locked at several versions has each
   looked up.
 

@@ -48,6 +48,9 @@ type Finding struct {
 	// Via is the dependency chain that pulls the package into the project, from one of the
 	// project's own dependencies down to the package itself.
 	Via []string `json:"via"`
+	// Bundled names the project's bundler when only dev dependencies pull the package in:
+	// the bundle may still carry it, so it counts as shipped.
+	Bundled string `json:"bundled,omitempty"`
 	// DirectImport: the project's own production code imports it by name.
 	DirectImport bool `json:"direct_import"`
 	// Executed: whether any of its code ran in the coverage run; Called, which of its
@@ -108,6 +111,11 @@ func Triage(advisories map[string][]Advisory, ev Evidence) []Finding {
 			f.Via = path
 		} else {
 			f.Via = all[name]
+
+			if ev.Lock.Bundler != "" {
+				f.Shipped = true
+				f.Bundled = ev.Lock.Bundler
+			}
 		}
 
 		f.DirectImport = ev.Imported[name]
@@ -214,6 +222,9 @@ func judgePackage(f Finding) (Verdict, string) {
 		return VerdictNotExecuted, "shipped via " + via + ", but none of its code ran in the coverage run"
 	case f.DirectImport:
 		return VerdictReachable, "imported by the project's own code"
+	case f.Bundled != "":
+		return VerdictShipped, "only dev dependencies pull it in (" + via + "), but the project builds with " +
+			f.Bundled + ", so it may be in the bundle - check the build output"
 	default:
 		return VerdictShipped, "shipped via " + via + " - give a coverage report to see whether it runs"
 	}

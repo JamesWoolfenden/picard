@@ -68,6 +68,7 @@ func ReadNPMLock(path string) (*Lock, error) {
 	root := raw.Packages[""]
 	lock.Direct = mergeNames(nil, sortedKeys(root.Dependencies, root.OptionalDependencies, root.PeerDependencies))
 	lock.DevDirect = sortedKeys(root.DevDependencies)
+	lock.Bundler = findBundler(mergeNames(lock.Direct, lock.DevDirect))
 
 	keys := make([]string, 0, len(raw.Packages))
 	for key := range raw.Packages {
@@ -116,6 +117,29 @@ func ReadNPMLock(path string) (*Lock, error) {
 	}
 
 	return lock, nil
+}
+
+// bundlers are packages that, as a project's own direct dependency, mean its build bundles
+// code - bundlers themselves, and frameworks whose build runs one.
+var bundlers = map[string]bool{
+	"esbuild": true, "webpack": true, "webpack-cli": true, "rollup": true, "rolldown": true,
+	"vite": true, "parcel": true, "@vercel/ncc": true, "tsup": true, "@rspack/core": true,
+	"@rspack/cli": true, "browserify": true, "next": true, "nuxt": true, "@sveltejs/kit": true,
+	"react-scripts": true, "@angular-devkit/build-angular": true, "@angular/build": true,
+	"gatsby": true, "astro": true, "@remix-run/dev": true,
+}
+
+// findBundler is the first of a project's direct dependencies that bundles its build, or "".
+// Only direct ones count: a test runner pulling in a bundler for itself (vitest → vite)
+// doesn't bundle the project.
+func findBundler(direct []string) string {
+	for _, name := range direct {
+		if bundlers[name] {
+			return name
+		}
+	}
+
+	return ""
 }
 
 func hasVariant(pkg *Package, version string) bool {
