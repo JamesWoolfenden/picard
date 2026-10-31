@@ -224,35 +224,175 @@ func ApplyDecisions(gh *GitHub, repo string, decisions []AlertDecision, judged b
 	return firstErr
 }
 
-// WriteDecisions writes the proposals as a table, then each reason.
-func WriteDecisions(w io.Writer, repo string, decisions []AlertDecision) error {
-	counts := map[string]int{}
-	for _, d := range decisions {
-		key := d.Action
-		if d.Action == ActionDismiss && d.Judged {
-			key += " (judged)"
-		}
+// alertGroup is the alerts of one package that get the same proposal - one table row.
+type alertGroup struct {
+	decisions []AlertDecision
+	severity  string
+}
 
-		counts[key]++
+func (g alertGroup) first() AlertDecision { return g.decisions[0] }
+
+func (g alertGroup) numbers() []int {
+	n := make([]int, len(g.decisions))
+	for i, d := range g.decisions {
+		n[i] = d.Alert.Number
 	}
 
-	fmt.Fprintf(w, "%s: %d alerts - %d keep open, %d dismiss, %d dismiss on judgement, %d skipped\n\n",
-		repo, len(decisions), counts[ActionKeepOpen], counts[ActionDismiss], counts[ActionDismiss+" (judged)"], counts[ActionSkip])
+	return n
+}
 
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ALERT\tPACKAGE\tSEVERITY\tVERDICT\tACTION\tMANIFEST")
+// action is the proposal as the table shows it.
+func (g alertGroup) action() string {
+	d := g.first()
+
+	switch {
+	case d.Action == ActionKeepOpen:
+		return "keep open"
+	case d.Action == ActionSkip:
+		return "skip"
+	case d.Applied:
+		return "dismissed: " + d.DismissReason
+	case d.Judged:
+		return "dismiss: " + d.DismissReason + " *"
+	default:
+		return "dismiss: " + d.DismissReason
+	}
+}
+
+// actionOrder puts what needs attention first: alerts to keep open, then dismissals that
+// rest on facts, then on judgement, then the ones picard couldn't match.
+func actionOrder(d AlertDecision) int {
+	switch {
+	case d.Action == ActionKeepOpen:
+		return 0
+	case d.Action == ActionDismiss && !d.Judged:
+		return 1
+	case d.Action == ActionDismiss:
+		return 2
+	default:
+		return 3
+	}
+}
+
+// groupDecisions groups alerts by package, manifest and proposal, most pressing first.
+func groupDecisions(decisions []AlertDecision) []alertGroup {
+	index := map[string]int{}
+
+	var groups []alertGroup
 
 	for _, d := range decisions {
-		action := d.Action
-		if d.Action == ActionDismiss {
-			action += " (" + d.DismissReason + ")"
-			if d.Judged {
-				action += " *"
-			}
+		key := strings.Join([]string{d.Alert.Dependency.Package.Name, d.Alert.Dependency.ManifestPath,
+			string(d.Verdict), d.Action, d.DismissReason, fmt.Sprint(d.Judged, d.Applied)}, "\x00")
 
-			if d.Applied {
-				action += " done"
-			}
+		i, ok := index[key]
+		if !ok {
+			i = len(groups)
+			index[key] = i
+			groups = append(groups, alertGroup{})
+		}
+
+		g := &groups[i]
+		g.decisions = append(g.decisions, d)
+
+		if sev := strings.ToLower(d.Alert.SecurityAdvisory.Severity); severityRank[sev] > severityRank[g.severity] || g.severity == "" {
+			g.severity = sev
+		}
+	}
+
+	sort.SliceStable(groups, func(i, j int) bool {
+		oi, oj := actionOrder(groups[i].first()), actionOrder(groups[j].first())
+		if oi != oj {
+			return oi < oj
+		}
+
+		si, sj := severityRank[groups[i].severity], severityRank[groups[j].severity]
+		if si != sj {
+			return si > sj
+		}
+
+		return groups[i].first().Alert.Dependency.Package.Name < groups[j].first().Alert.Dependency.Package.Name
+	})
+
+	return groups
+}
+
+// WriteDecisions writes the proposals: a summary line, one row per package and proposal,
+// the reasons, and what --apply / --apply-judged would do next.
+func WriteDecisions(w io.Writer, repo string, decisions []AlertDecision) error {
+	if len(decisions) == 0 {
+		_, err := fmt.Fprintf(w, "%s: no Dependabot alerts\n", repo)
+
+		return err
+	}
+
+	groups := groupDecisions(decisions)
+	width := textWidth()
+
+	var (
+		keep, fact, judged, skipped, done int
+		manifests                         = map[string]bool{}
+		packages                          = map[string]bool{}
+	)
+
+	for _, d := range decisions {
+		manifests[d.Alert.Dependency.ManifestPath] = true
+		packages[d.Alert.Dependency.Package.Name] = true
+
+		switch {
+		case d.Applied:
+			done++
+		case d.Action == ActionKeepOpen:
+			keep++
+		case d.Action == ActionSkip:
+			skipped++
+		case d.Judged:
+			judged++
+		default:
+			fact++
+		}
+	}
+
+	var parts []string
+
+	for _, p := range []struct {
+		n    int
+		text string
+	}{
+		{done, "dismissed"}, {keep, "to keep open"}, {fact, "to dismiss"},
+		{judged, "to dismiss on judgement"}, {skipped, "skipped"},
+	} {
+		if p.n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", p.n, p.text))
+		}
+	}
+
+	showManifest := len(manifests) > 1
+
+	where := ""
+	if !showManifest {
+		for m := range manifests {
+			where = " in " + m
+		}
+	}
+
+	fmt.Fprintf(w, "%s: %s on %s%s - %s\n\n", repo, plural(len(decisions), "alert"),
+		plural(len(packages), "package"), where, strings.Join(parts, ", "))
+
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+
+	header := "PACKAGE\tALERTS\tSEVERITY\tVERDICT\tACTION"
+	if showManifest {
+		header += "\tMANIFEST"
+	}
+
+	fmt.Fprintln(tw, header)
+
+	for _, g := range groups {
+		d := g.first()
+
+		alerts := numberRanges(g.numbers())
+		if len(g.decisions) > 2 {
+			alerts += fmt.Sprintf(" (%d)", len(g.decisions))
 		}
 
 		verdict := string(d.Verdict)
@@ -260,20 +400,66 @@ func WriteDecisions(w io.Writer, repo string, decisions []AlertDecision) error {
 			verdict = "-"
 		}
 
-		fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\t%s\t%s\n", d.Alert.Number, d.Alert.Dependency.Package.Name,
-			d.Alert.SecurityAdvisory.Severity, verdict, action, d.Alert.Dependency.ManifestPath)
+		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s", d.Alert.Dependency.Package.Name, alerts, g.severity, verdict, g.action())
+		if showManifest {
+			row += "\t" + d.Alert.Dependency.ManifestPath
+		}
+
+		fmt.Fprintln(tw, row)
 	}
 
 	if err := tw.Flush(); err != nil {
 		return err
 	}
 
-	fmt.Fprintln(w, "\n* rests on judgement (coverage or a model's assessment) - dismissed only with --apply-judged")
+	if judged > 0 {
+		fmt.Fprintln(w, "\n* rests on judgement (a coverage run or a model's assessment) - dismissed only with --apply-judged")
+	}
 
-	for _, d := range decisions {
-		fmt.Fprintf(w, "\n#%d %s (%s): %s\n", d.Alert.Number, d.Alert.SecurityAdvisory.GHSAID,
-			strings.TrimSpace(d.Alert.SecurityAdvisory.Summary), d.Reason)
+	for _, g := range groups {
+		writeGroupReasons(w, g, width)
+	}
+
+	switch {
+	case fact > 0 && judged > 0:
+		fmt.Fprintf(w, "\nDry run. --apply dismisses %s; --apply-judged also the %d resting on judgement - read their reasons first.\n",
+			plural(fact, "alert"), judged)
+	case fact > 0:
+		fmt.Fprintf(w, "\nDry run. --apply dismisses %s.\n", plural(fact, "alert"))
+	case judged > 0:
+		fmt.Fprintf(w, "\nDry run. --apply-judged dismisses %s - read their reasons first.\n", plural(judged, "alert"))
 	}
 
 	return nil
+}
+
+// writeGroupReasons writes one group's reasoning: once when every alert shares it, else per
+// alert.
+func writeGroupReasons(w io.Writer, g alertGroup, width int) {
+	d := g.first()
+
+	fmt.Fprintf(w, "\n%s %s - %s\n", d.Alert.Dependency.Package.Name, numberRanges(g.numbers()), g.action())
+
+	same := true
+	for _, other := range g.decisions[1:] {
+		if other.Reason != d.Reason {
+			same = false
+
+			break
+		}
+	}
+
+	if same {
+		fmt.Fprint(w, wrap(d.Reason, "  ", width))
+	}
+
+	for _, a := range g.decisions {
+		adv := a.Alert.SecurityAdvisory
+		line := fmt.Sprintf("  #%d %s ", a.Alert.Number, adv.GHSAID)
+		fmt.Fprintln(w, line+clip(adv.Summary, width-len(line)))
+
+		if !same {
+			fmt.Fprint(w, wrap(a.Reason, "      ", width))
+		}
+	}
 }

@@ -52,44 +52,100 @@ func (r Report) WriteTable(w io.Writer) error {
 		return err
 	}
 
-	fmt.Fprintf(w, "%s: %d advisories across %d packages - %d upgrade(s) fix all of them\n\n",
-		r.Project, r.AlertCount(), len(r.Findings), len(r.Findings))
+	fixable, coverage := 0, false
+
+	for _, f := range r.Findings {
+		if f.FixVersion != "" {
+			fixable++
+		}
+
+		coverage = coverage || f.Executed != UseUnknown
+	}
+
+	upgrades := plural(fixable, "upgrade") + " fix all of them"
+	switch {
+	case fixable == 0:
+		upgrades = "no fixed versions yet"
+	case fixable < len(r.Findings):
+		upgrades = fmt.Sprintf("%s fix %d; %d have no fixed version yet", plural(fixable, "upgrade"),
+			fixable, len(r.Findings)-fixable)
+	}
+
+	fmt.Fprintf(w, "%s: %s across %s - %s\n\n", r.Project, plural(r.AlertCount(), "advisory"),
+		plural(len(r.Findings), "package"), upgrades)
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "VERDICT\tPACKAGE\tVERSION\tFIX\tSEVERITY\tALERTS\tIMPORTED\tEXECUTED")
+
+	header := "VERDICT\tPACKAGE\tVERSION\tFIX\tSEVERITY\tADVISORIES\tIMPORTED"
+	if coverage {
+		header += "\tEXECUTED"
+	}
+
+	fmt.Fprintln(tw, header)
 
 	for _, f := range r.Findings {
 		fix := f.FixVersion
 		if fix == "" {
-			fix = "none"
+			fix = "-"
 		}
 
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", f.Verdict, f.Package, f.Version, fix,
-			f.Severity, len(f.Advisories), yesNo(f.DirectImport), f.Executed)
+		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%d\t%s", f.Verdict, f.Package, f.Version, fix,
+			f.Severity, len(f.Advisories), yesNo(f.DirectImport))
+		if coverage {
+			row += "\t" + string(f.Executed)
+		}
+
+		fmt.Fprintln(tw, row)
 	}
 
 	if err := tw.Flush(); err != nil {
 		return err
 	}
 
+	width := textWidth()
+
 	for _, f := range r.Findings {
-		fmt.Fprintf(w, "\n%s %s: %s\n", f.Package, f.Version, f.Reason)
-
-		if len(f.Advisories) > 1 {
-			fmt.Fprintf(w, "  %d advisories: %s\n", len(f.Advisories), verdictCounts(f.Advisories))
-		}
-
-		// The advisories that still need acting on, individually.
-		for _, a := range f.Advisories {
-			if verdictRank(a.Verdict) < verdictRank(VerdictShipped) || len(f.Advisories) == 1 {
-				continue
-			}
-
-			fmt.Fprintf(w, "  - %s (%s) %s: %s\n", a.ID, a.Severity, a.Verdict, a.Reason)
-		}
+		writeFindingReasons(w, f, width)
 	}
 
 	return nil
+}
+
+// writeFindingReasons writes a package's verdict and reason, then any of its advisories
+// still needing action whose reasoning differs - the rest are just listed.
+func writeFindingReasons(w io.Writer, f Finding, width int) {
+	heading := fmt.Sprintf("\n%s %s - %s", f.Package, f.Version, f.Verdict)
+	if len(f.Advisories) > 1 {
+		heading += " (" + plural(len(f.Advisories), "advisory") + ": " + verdictCounts(f.Advisories) + ")"
+	}
+
+	fmt.Fprintln(w, heading)
+	fmt.Fprint(w, wrap(f.Reason, "  ", width))
+
+	if len(f.Advisories) == 1 {
+		fmt.Fprint(w, wrap(f.Advisories[0].ID+": "+f.Advisories[0].Summary, "  ", width))
+
+		return
+	}
+
+	// Advisories still needing action get their own reasoning when it differs; the rest
+	// (the one above, and any already ruled out - see --format json) are just named.
+	var others []string
+
+	for _, a := range f.Advisories {
+		if a.Reason == f.Reason || verdictRank(a.Verdict) < verdictRank(VerdictShipped) {
+			others = append(others, a.ID)
+
+			continue
+		}
+
+		fmt.Fprintf(w, "  - %s (%s) %s:\n", a.ID, a.Severity, a.Verdict)
+		fmt.Fprint(w, wrap(a.Reason, "      ", width))
+	}
+
+	if len(others) > 0 {
+		fmt.Fprint(w, wrap("advisories: "+strings.Join(others, ", "), "  ", width))
+	}
 }
 
 func verdictCounts(advs []Advisory) string {
@@ -115,7 +171,7 @@ func verdictCounts(advs []Advisory) string {
 
 func yesNo(b bool) string {
 	if b {
-		return "direct"
+		return "yes"
 	}
 
 	return "no"

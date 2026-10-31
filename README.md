@@ -77,7 +77,7 @@ pan (a self-hosted music app) before its October 2026 fixes. Dependabot showed 1
 Package evidence only, from its test suite's coverage - note how wrong this ranking is:
 
 ```text
-VERDICT      PACKAGE     VERSION    FIX         SEVERITY  ALERTS  IMPORTED  EXECUTED
+VERDICT      PACKAGE     VERSION    FIX         SEVERITY  ADVISORIES  IMPORTED  EXECUTED
 reachable    filelock    4.1.0      4.2.1       high      17      no        yes
 reachable    setuptools  84.0.0     84.1.0      low       1       no        yes
 import-only  certifi     2026.7.22  2026.10.19  critical  2       no        yes
@@ -88,7 +88,7 @@ With `--assess` and pan's `picard.yaml`:
 ```text
 pan: 20 advisories across 3 packages - 3 upgrade(s) fix all of them
 
-VERDICT         PACKAGE     VERSION    FIX         SEVERITY  ALERTS  IMPORTED  EXECUTED
+VERDICT         PACKAGE     VERSION    FIX         SEVERITY  ADVISORIES  IMPORTED  EXECUTED
 reachable       certifi     2026.7.22  2026.10.19  critical  2       no        yes
 not-applicable  filelock    4.1.0      4.2.1       high      17      no        yes
 not-applicable  setuptools  84.0.0     84.1.0      low       1       no        yes
@@ -131,18 +131,26 @@ Needs a GitHub token (`GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`); dismissin
 write access to Dependabot alerts. `--state fixed --lock old/uv.lock` replays past alerts
 against an old lock, for checking picard's proposals against decisions already made.
 
-ghat (a live alert, October 2026):
+garmin-mcp-gt (a live alert, October 2026) - a Vite app whose `vite build` bundles only
+what the code imports:
 
 ```text
-JamesWoolfenden/ghat: 1 alerts - 0 keep open, 1 dismiss, 0 dismiss on judgement, 0 skipped
+JamesWoolfenden/garmin-mcp-gt: 1 alert on 1 package in ui/package-lock.json - 1 to dismiss
 
-ALERT  PACKAGE           SEVERITY  VERDICT      ACTION              MANIFEST
-#78    @azure/msal-node  high      not-shipped  dismiss (not_used)  editors/vscode/package-lock.json
+PACKAGE  ALERTS  SEVERITY  VERDICT      ACTION
+uuid     #10     medium    not-shipped  dismiss: not_used
 
-#78 GHSA-xcx6-jx8p-x3h5 (MSAL Node authorization code flow may disclose parameters to an
-attacker-controlled endpoint): only pulled in by dev/test dependencies (@vscode/vsce →
-@azure/identity → @azure/msal-node), so not in a production install
+uuid #10 - dismiss: not_used
+  only pulled in by dev/test dependencies (firebase-tools → gaxios → uuid), and vite bundles only what the code
+  imports, none of which pulls it in
+  #10 GHSA-w5hq-g745-h8pq uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided
+
+Dry run. --apply dismisses 1 alert.
 ```
+
+Alerts of one package with the same proposal are one row (`filelock #3-8, #10-20 (17)`);
+a reason shared by all of them is written once, and judged ones list each alert's own
+reasoning, since that's what you're signing off with `--apply-judged`.
 
 ## Surface: what each dependency costs
 
