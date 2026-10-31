@@ -273,11 +273,9 @@ func TestScanRejectsCoverageForAnNPMLock(t *testing.T) {
 	}
 }
 
-// With a bundler among the project's own dependencies, a dev-only package may be copied into
-// the bundle, so it's shipped - never a not-shipped that `--apply` would dismiss.
-func TestScanNPMProjectWithABundlerKeepsDevOnlyAdvisoryShipped(t *testing.T) {
-	root := t.TempDir()
-
+// With a bundler, a dev-only package ships exactly when the code's imports reach it: the
+// bundle carries what's imported, however it was declared.
+func TestScanNPMProjectWithABundlerShipsWhatTheCodeImports(t *testing.T) {
 	lock, err := os.ReadFile("testdata/ui-package-lock.json")
 	if err != nil {
 		t.Fatal(err)
@@ -286,23 +284,56 @@ func TestScanNPMProjectWithABundlerKeepsDevOnlyAdvisoryShipped(t *testing.T) {
 	bundled := strings.Replace(string(lock), `"devDependencies": { "vitest": "^1.0.0" }`,
 		`"devDependencies": { "vitest": "^1.0.0", "esbuild": "^0.24.0" }`, 1)
 
-	writeFiles(t, root, map[string]string{"package-lock.json": bundled})
-
 	server := uuidOSV()
 	defer server.Close()
 
-	report, err := Scan(Options{Directory: root, OSV: &OSV{BaseURL: server.URL, Client: server.Client()}})
+	for _, tc := range []struct {
+		name, code string
+		want       Verdict
+	}{
+		{"imported", `import { v4 } from 'uuid';`, VerdictReachable},
+		{"not imported", `import React from 'react';`, VerdictNotShipped},
+	} {
+		root := t.TempDir()
+		writeFiles(t, root, map[string]string{"package-lock.json": bundled, "src/index.js": tc.code})
+
+		report, err := Scan(Options{Directory: root, OSV: &OSV{BaseURL: server.URL, Client: server.Client()}})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(report.Findings) != 1 {
+			t.Fatalf("%s: report = %+v", tc.name, report)
+		}
+
+		f := report.Findings[0]
+		if f.Verdict != tc.want || f.Bundler != "esbuild" || f.Bundled != (tc.want == VerdictReachable) {
+			t.Errorf("%s: finding = %+v", tc.name, f)
+		}
+	}
+}
+
+// vite run by a script counts, even when only a plugin or vitest brings it in.
+func TestReadNPMLockFindsABundlerRunByAScript(t *testing.T) {
+	root := t.TempDir()
+
+	lock, err := os.ReadFile("testdata/ui-package-lock.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(report.Findings) != 1 {
-		t.Fatalf("report = %+v", report)
+	writeFiles(t, root, map[string]string{
+		"package-lock.json": string(lock),
+		"package.json":      `{"scripts": {"test": "vitest run", "build": "tsc && vite build"}}`,
+	})
+
+	got, err := ReadNPMLock(filepath.Join(root, "package-lock.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	f := report.Findings[0]
-	if !f.Shipped || f.Bundled != "esbuild" || f.Verdict != VerdictShipped {
-		t.Errorf("finding = %+v", f)
+	if got.Bundler != "vite" {
+		t.Errorf("bundler = %q, want vite", got.Bundler)
 	}
 }
 

@@ -48,9 +48,11 @@ type Finding struct {
 	// Via is the dependency chain that pulls the package into the project, from one of the
 	// project's own dependencies down to the package itself.
 	Via []string `json:"via"`
-	// Bundled names the project's bundler when only dev dependencies pull the package in:
-	// the bundle may still carry it, so it counts as shipped.
-	Bundled string `json:"bundled,omitempty"`
+	// Bundler is the project's bundler, if it has one. Bundled: only dev dependencies
+	// declare the package, but the code's imports reach it, so the bundle carries it and it
+	// counts as shipped (Via is then the import chain).
+	Bundler string `json:"bundler,omitempty"`
+	Bundled bool   `json:"bundled,omitempty"`
 	// DirectImport: the project's own production code imports it by name.
 	DirectImport bool `json:"direct_import"`
 	// Executed: whether any of its code ran in the coverage run; Called, which of its
@@ -83,6 +85,18 @@ func Triage(advisories map[string][]Advisory, ev Evidence) []Finding {
 	prod := ev.Lock.Closure(ev.Lock.Direct)
 	all := ev.Lock.Closure(append(append([]string(nil), ev.Lock.Direct...), ev.Lock.DevDirect...))
 
+	// A bundler copies in what the code's imports reach, however it was declared.
+	var bundled map[string][]string
+	if ev.Lock.Bundler != "" {
+		imported := make([]string, 0, len(ev.Imported))
+		for name := range ev.Imported {
+			imported = append(imported, name)
+		}
+
+		sort.Strings(imported)
+		bundled = ev.Lock.Closure(imported)
+	}
+
 	var findings []Finding
 
 	for name, advs := range advisories {
@@ -112,9 +126,12 @@ func Triage(advisories map[string][]Advisory, ev Evidence) []Finding {
 		} else {
 			f.Via = all[name]
 
-			if ev.Lock.Bundler != "" {
+			f.Bundler = ev.Lock.Bundler
+
+			if path, ok := bundled[name]; ok {
 				f.Shipped = true
-				f.Bundled = ev.Lock.Bundler
+				f.Bundled = true
+				f.Via = path
 			}
 		}
 
@@ -209,6 +226,9 @@ func judgePackage(f Finding) (Verdict, string) {
 	via := strings.Join(f.Via, " → ")
 
 	switch {
+	case !f.Shipped && f.Bundler != "":
+		return VerdictNotShipped, "only pulled in by dev/test dependencies (" + via + "), and " + f.Bundler +
+			" bundles only what the code imports, none of which pulls it in"
 	case !f.Shipped:
 		return VerdictNotShipped, "only pulled in by dev/test dependencies (" + via + "), so not in a production install"
 	case f.Executed == UseYes && !f.FunctionData:
@@ -222,9 +242,9 @@ func judgePackage(f Finding) (Verdict, string) {
 		return VerdictNotExecuted, "shipped via " + via + ", but none of its code ran in the coverage run"
 	case f.DirectImport:
 		return VerdictReachable, "imported by the project's own code"
-	case f.Bundled != "":
-		return VerdictShipped, "only dev dependencies pull it in (" + via + "), but the project builds with " +
-			f.Bundled + ", so it may be in the bundle - check the build output"
+	case f.Bundled:
+		return VerdictShipped, "declared only as a dev dependency, but " + f.Bundler +
+			" bundles what the code imports, which reaches it (" + via + ")"
 	default:
 		return VerdictShipped, "shipped via " + via + " - give a coverage report to see whether it runs"
 	}

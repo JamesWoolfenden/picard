@@ -166,9 +166,9 @@ func describeEvidence(f Finding) string {
 	var b strings.Builder
 
 	switch {
-	case f.Bundled != "":
-		fmt.Fprintf(&b, "Only dev dependencies pull it in (%s), but the project builds with %s, which may copy it into what ships.\n",
-			strings.Join(f.Via, " -> "), f.Bundled)
+	case f.Bundled:
+		fmt.Fprintf(&b, "Declared only as a dev dependency, but %s bundles it: the code's imports reach it via %s.\n",
+			f.Bundler, strings.Join(f.Via, " -> "))
 	case f.Shipped:
 		fmt.Fprintf(&b, "Shipped in the production install, pulled in via %s.\n", strings.Join(f.Via, " -> "))
 	default:

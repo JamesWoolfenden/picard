@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -69,6 +70,9 @@ func ReadNPMLock(path string) (*Lock, error) {
 	lock.Direct = mergeNames(nil, sortedKeys(root.Dependencies, root.OptionalDependencies, root.PeerDependencies))
 	lock.DevDirect = sortedKeys(root.DevDependencies)
 	lock.Bundler = findBundler(mergeNames(lock.Direct, lock.DevDirect))
+	if lock.Bundler == "" {
+		lock.Bundler = scriptBundler(filepath.Join(filepath.Dir(path), "package.json"))
+	}
 
 	keys := make([]string, 0, len(raw.Packages))
 	for key := range raw.Packages {
@@ -136,6 +140,44 @@ func findBundler(direct []string) string {
 	for _, name := range direct {
 		if bundlers[name] {
 			return name
+		}
+	}
+
+	return ""
+}
+
+// bundlerCommands are the commands, as package.json scripts run them, that bundle a build.
+var bundlerCommands = map[string]bool{
+	"esbuild": true, "webpack": true, "rollup": true, "rolldown": true, "vite": true, "parcel": true,
+	"ncc": true, "tsup": true, "rspack": true, "browserify": true, "next": true, "nuxt": true,
+	"nuxi": true, "svelte-kit": true, "react-scripts": true, "ng": true, "gatsby": true,
+	"astro": true, "remix": true,
+}
+
+var scriptWordRe = regexp.MustCompile(`[A-Za-z0-9@/._-]+`)
+
+// scriptBundler is the first bundler command run by a package.json script, or "" - for a
+// bundler that only arrives transitively (`vite build` with vite brought in by a plugin).
+func scriptBundler(packageJSON string) string {
+	data, err := os.ReadFile(packageJSON)
+	if err != nil {
+		return ""
+	}
+
+	var manifest struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+
+	if json.Unmarshal(data, &manifest) != nil {
+		return ""
+	}
+
+	names := sortedKeys(manifest.Scripts)
+	for _, name := range names {
+		for _, word := range scriptWordRe.FindAllString(manifest.Scripts[name], -1) {
+			if bundlerCommands[word] {
+				return word
+			}
 		}
 	}
 

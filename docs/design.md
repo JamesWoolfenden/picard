@@ -48,11 +48,14 @@ dependencies and dev groups. A breadth-first walk from the runtime dependencies 
 production closure, and for each package the shortest chain that pulls it in
 (`plexapi → requests → certifi`). Anything reachable only from dev groups is not shipped.
 
-For npm, "dev dependency" only means "doesn't ship" when nothing bundles the build. If the
-project's own dependencies include a bundler (esbuild, webpack, vite, rollup, Next.js, ...),
-whatever the code reaches is copied into the output regardless of how it was declared, so
-dev-only packages are treated as shipped, with the bundler named in the reason. Only direct
-dependencies count - vitest pulling in vite for its own use doesn't bundle the project.
+For npm, "dev dependency" only means "doesn't ship" when nothing bundles the build. A
+bundler (esbuild, webpack, vite, rollup, Next.js, ...) copies whatever the code's imports
+reach into its output, however it was declared. picard finds the bundler among the project's
+own dependencies or as a command its `package.json` scripts run (`vite build`, with vite
+brought in only by a plugin) - vitest pulling in vite to run tests doesn't count. Then a
+dev-only package is shipped exactly when it's in the dependency closure of the packages the
+code imports; one only a tool brings in (`firebase-tools → gaxios → uuid`) stays
+`not-shipped`, and the reason says the bundler was taken into account.
 
 Platform markers are ignored, deliberately: a Windows-only dependency counts as shipped.
 That can over-report, never under-report.
