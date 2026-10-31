@@ -41,8 +41,11 @@ type Wheel struct {
 // Lock is a parsed uv.lock: every resolved package, plus which of them a production install
 // actually gets.
 type Lock struct {
-	Project  string
-	Packages map[string]*Package
+	Project string
+	// Ecosystem is the package registry the lock is for, as OSV names it (EcosystemPyPI or
+	// EcosystemNPM).
+	Ecosystem string
+	Packages  map[string]*Package
 	// Direct are the project's own runtime dependencies; DevDirect its dev-group ones.
 	Direct    []string
 	DevDirect []string
@@ -102,7 +105,7 @@ func ReadUVLock(path string) (*Lock, error) {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
 
-	lock := &Lock{Packages: map[string]*Package{}}
+	lock := &Lock{Ecosystem: EcosystemPyPI, Packages: map[string]*Package{}}
 	if m := minPythonRe.FindStringSubmatch(raw.RequiresPython); m != nil {
 		lock.MinPython = m[1]
 	}

@@ -15,9 +15,11 @@ import (
 // Options configures a scan.
 type Options struct {
 	Directory string
-	// LockFile defaults to <Directory>/uv.lock.
+	// LockFile defaults to <Directory>/uv.lock, or <Directory>/package-lock.json when there
+	// is no uv.lock. A file named package-lock.json is read as an npm lock, anything else as
+	// a uv.lock.
 	LockFile string
-	// Coverage is an optional coverage.py JSON report (see ReadCoverage).
+	// Coverage is an optional coverage.py JSON report (see ReadCoverage). Python only.
 	Coverage string
 	OSV      *OSV
 	// Assessor, when set, reads each shipped package's advisories (see assess.go);
@@ -31,27 +33,48 @@ const assessConcurrency = 4
 
 // Scan runs every check against a project and returns the triaged report.
 func Scan(opts Options) (*Report, error) {
-	lockFile := opts.LockFile
-	if lockFile == "" {
-		lockFile = filepath.Join(opts.Directory, "uv.lock")
-	}
+	lockFile := resolveLockFile(opts)
 
-	lock, err := ReadUVLock(lockFile)
-	if err != nil {
-		return nil, err
-	}
+	var (
+		lock     *Lock
+		err      error
+		imported map[string]bool
+		owners   map[string]string
+		executed map[string]*ModuleUse
+	)
 
-	imports, err := ScanImports(opts.Directory)
-	if err != nil {
-		return nil, fmt.Errorf("scanning imports: %w", err)
-	}
+	if filepath.Base(lockFile) == "package-lock.json" {
+		if opts.Coverage != "" {
+			return nil, fmt.Errorf("--coverage is a coverage.py report: it doesn't apply to an npm lock")
+		}
 
-	owners := ModuleOwners(FindSitePackages(opts.Directory))
-
-	var executed map[string]*ModuleUse
-	if opts.Coverage != "" {
-		if executed, err = ReadCoverage(opts.Coverage); err != nil {
+		if lock, err = ReadNPMLock(lockFile); err != nil {
 			return nil, err
+		}
+
+		imports, err := ScanJSImports(opts.Directory)
+		if err != nil {
+			return nil, fmt.Errorf("scanning imports: %w", err)
+		}
+
+		imported = imports.Production
+	} else {
+		if lock, err = ReadUVLock(lockFile); err != nil {
+			return nil, err
+		}
+
+		imports, err := ScanImports(opts.Directory)
+		if err != nil {
+			return nil, fmt.Errorf("scanning imports: %w", err)
+		}
+
+		owners = ModuleOwners(FindSitePackages(opts.Directory))
+		imported = PackagesForModules(imports.Production, owners)
+
+		if opts.Coverage != "" {
+			if executed, err = ReadCoverage(opts.Coverage); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -67,14 +90,14 @@ func Scan(opts Options) (*Report, error) {
 		osv = NewOSV()
 	}
 
-	advisories, err := osv.Query(packages)
+	advisories, err := osv.Query(lock.Ecosystem, packages)
 	if err != nil {
 		return nil, err
 	}
 
 	findings := Triage(advisories, Evidence{
 		Lock:     lock,
-		Imported: PackagesForModules(imports.Production, owners),
+		Imported: imported,
 		Executed: executed,
 		Owners:   owners,
 	})
@@ -84,7 +107,25 @@ func Scan(opts Options) (*Report, error) {
 		Rejudge(findings)
 	}
 
-	return &Report{Project: lock.Project, Findings: findings}, nil
+	return &Report{Project: lock.Project, Ecosystem: lock.Ecosystem, Findings: findings}, nil
+}
+
+// resolveLockFile is the lock file to scan: the one given, else uv.lock, else (for a
+// JavaScript project) package-lock.json. uv.lock is the default when neither exists, so the
+// error names it.
+func resolveLockFile(opts Options) string {
+	if opts.LockFile != "" {
+		return opts.LockFile
+	}
+
+	uv := filepath.Join(opts.Directory, "uv.lock")
+	npm := filepath.Join(opts.Directory, "package-lock.json")
+
+	if !Exists(uv) && Exists(npm) {
+		return npm
+	}
+
+	return uv
 }
 
 // assess attaches an assessment to every advisory of every shipped package - those not

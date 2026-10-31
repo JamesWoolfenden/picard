@@ -1,0 +1,144 @@
+package core
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// Ecosystems a lock file can belong to, named as OSV names them.
+const (
+	EcosystemPyPI = "PyPI"
+	EcosystemNPM  = "npm"
+)
+
+const nodeModules = "node_modules/"
+
+type npmEntry struct {
+	Name                 string            `json:"name"`
+	Version              string            `json:"version"`
+	Link                 bool              `json:"link"`
+	Dependencies         map[string]string `json:"dependencies"`
+	OptionalDependencies map[string]string `json:"optionalDependencies"`
+	PeerDependencies     map[string]string `json:"peerDependencies"`
+	DevDependencies      map[string]string `json:"devDependencies"`
+}
+
+type npmLockFile struct {
+	Name            string              `json:"name"`
+	LockfileVersion int                 `json:"lockfileVersion"`
+	Packages        map[string]npmEntry `json:"packages"`
+}
+
+// ReadNPMLock parses a package-lock.json (lockfileVersion 2 or 3, written by npm 7+). The
+// root entry's dependencies are the project's runtime ones and its devDependencies the dev
+// ones; whether a package ships is then decided by walking the graph, the same as for
+// uv.lock, rather than trusting the lock's own "dev" flags.
+//
+// Dependencies are tracked by package name. A package locked at several versions (nested
+// node_modules) is one Package whose Version is the shallowest install and whose Variants
+// list every version, so each is looked up; the dependency edges of all copies are merged.
+func ReadNPMLock(path string) (*Lock, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+
+	var raw npmLockFile
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+
+	if raw.LockfileVersion < 2 || len(raw.Packages) == 0 {
+		return nil, fmt.Errorf("%s: lockfileVersion %d has no packages map - regenerate it with npm 7 or later",
+			path, raw.LockfileVersion)
+	}
+
+	lock := &Lock{Ecosystem: EcosystemNPM, Packages: map[string]*Package{}, Project: raw.Name}
+
+	if lock.Project == "" {
+		if abs, err := filepath.Abs(path); err == nil {
+			lock.Project = filepath.Base(filepath.Dir(abs))
+		}
+	}
+
+	root := raw.Packages[""]
+	lock.Direct = mergeNames(nil, sortedKeys(root.Dependencies, root.OptionalDependencies, root.PeerDependencies))
+	lock.DevDirect = sortedKeys(root.DevDependencies)
+
+	keys := make([]string, 0, len(raw.Packages))
+	for key := range raw.Packages {
+		keys = append(keys, key)
+	}
+
+	// Shallowest install first (then alphabetical), so the first copy seen is the primary.
+	sort.Slice(keys, func(i, j int) bool {
+		di, dj := strings.Count(keys[i], nodeModules), strings.Count(keys[j], nodeModules)
+		if di != dj {
+			return di < dj
+		}
+
+		return keys[i] < keys[j]
+	})
+
+	for _, key := range keys {
+		entry := raw.Packages[key]
+
+		// "" is the project; entries outside node_modules, and links, are workspace members.
+		if key == "" || entry.Link || !strings.Contains(key, nodeModules) {
+			continue
+		}
+
+		name := entry.Name
+		if name == "" {
+			name = key[strings.LastIndex(key, nodeModules)+len(nodeModules):]
+		}
+
+		deps := sortedKeys(entry.Dependencies, entry.OptionalDependencies, entry.PeerDependencies)
+
+		pkg, seen := lock.Packages[name]
+		if !seen {
+			lock.Packages[name] = &Package{
+				Name: name, Version: entry.Version, Deps: deps, Variants: []Variant{{Version: entry.Version}},
+			}
+
+			continue
+		}
+
+		pkg.Deps = mergeNames(pkg.Deps, deps)
+
+		if !hasVariant(pkg, entry.Version) {
+			pkg.Variants = append(pkg.Variants, Variant{Version: entry.Version})
+		}
+	}
+
+	return lock, nil
+}
+
+func hasVariant(pkg *Package, version string) bool {
+	for _, v := range pkg.Variants {
+		if v.Version == version {
+			return true
+		}
+	}
+
+	return false
+}
+
+// sortedKeys is the sorted union of the keys of several dependency maps.
+func sortedKeys(maps ...map[string]string) []string {
+	var names []string
+
+	for _, m := range maps {
+		for name := range m {
+			names = append(names, name)
+		}
+	}
+
+	sort.Strings(names)
+
+	return mergeNames(nil, names)
+}

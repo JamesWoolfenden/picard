@@ -36,7 +36,7 @@ func TestOSVQueryFindsTheLowestFixAboveTheLockedVersion(t *testing.T) {
 
 	osv := &OSV{BaseURL: server.URL, Client: server.Client()}
 
-	got, err := osv.Query([]*Package{{Name: "filelock", Version: "4.1.0"}, {Name: "safe", Version: "1"}})
+	got, err := osv.Query(EcosystemPyPI, []*Package{{Name: "filelock", Version: "4.1.0"}, {Name: "safe", Version: "1"}})
 	if err != nil {
 		t.Fatal(err)
 	}

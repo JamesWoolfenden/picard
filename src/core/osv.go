@@ -76,13 +76,44 @@ type osvVuln struct {
 	} `json:"references"`
 }
 
-// Query returns the advisories for each package (by normalized name) at its locked version.
-func (o *OSV) Query(packages []*Package) (map[string][]Advisory, error) {
-	queries := make([]osvQuery, len(packages))
-	for i, p := range packages {
-		queries[i].Package.Name = p.Name
-		queries[i].Package.Ecosystem = "PyPI"
-		queries[i].Version = p.Version
+// queryVersions are the versions of a package to look up. A Python lock's variants are
+// builds of one release for different platforms, so its primary version stands for them
+// all; an npm package locked at several versions (nested node_modules) really installs each
+// one, so each is looked up.
+func queryVersions(ecosystem string, p *Package) []string {
+	if ecosystem != EcosystemNPM || len(p.Variants) == 0 {
+		return []string{p.Version}
+	}
+
+	versions := make([]string, 0, len(p.Variants))
+	for _, v := range p.Variants {
+		versions = append(versions, v.Version)
+	}
+
+	return versions
+}
+
+// Query returns the advisories for each package (by name as the lock spells it) at its
+// locked version(s), looked up in the given OSV ecosystem (EcosystemPyPI or EcosystemNPM).
+func (o *OSV) Query(ecosystem string, packages []*Package) (map[string][]Advisory, error) {
+	var (
+		queries []osvQuery
+		owners  []*Package // the package each query is about
+		asked   []string   // the version each query asked for
+	)
+
+	for _, p := range packages {
+		for _, version := range queryVersions(ecosystem, p) {
+			var q osvQuery
+
+			q.Package.Name = p.Name
+			q.Package.Ecosystem = ecosystem
+			q.Version = version
+
+			queries = append(queries, q)
+			owners = append(owners, p)
+			asked = append(asked, version)
+		}
 	}
 
 	var batch struct {
@@ -98,19 +129,28 @@ func (o *OSV) Query(packages []*Package) (map[string][]Advisory, error) {
 	}
 
 	result := map[string][]Advisory{}
+	seen := map[string]bool{} // "<package>/<advisory>": one alert per package, however many versions hit it
 
 	for i, r := range batch.Results {
-		if i >= len(packages) {
+		if i >= len(queries) {
 			break
 		}
 
+		name := owners[i].Name
+
 		for _, v := range r.Vulns {
+			if seen[name+"/"+v.ID] {
+				continue
+			}
+
+			seen[name+"/"+v.ID] = true
+
 			vuln, err := o.vuln(v.ID)
 			if err != nil {
 				return nil, err
 			}
 
-			result[packages[i].Name] = append(result[packages[i].Name], toAdvisory(vuln, packages[i]))
+			result[name] = append(result[name], toAdvisory(vuln, ecosystem, name, asked[i]))
 		}
 	}
 
@@ -216,7 +256,18 @@ func (o *OSV) post(path string, body any, into any) error {
 	return json.NewDecoder(resp.Body).Decode(into)
 }
 
-func toAdvisory(v *osvVuln, pkg *Package) Advisory {
+// sameName compares an advisory's package name with a lock's: PyPI names are normalized
+// (PEP 503), npm names are case-sensitive and compared as they are.
+func sameName(ecosystem, a, b string) bool {
+	if ecosystem == EcosystemNPM {
+		return a == b
+	}
+
+	return NormalizeName(a) == NormalizeName(b)
+}
+
+// toAdvisory converts an OSV record for the given package at the version that was looked up.
+func toAdvisory(v *osvVuln, ecosystem, name, version string) Advisory {
 	a := Advisory{
 		ID:       v.ID,
 		Aliases:  v.Aliases,
@@ -239,14 +290,14 @@ func toAdvisory(v *osvVuln, pkg *Package) Advisory {
 	}
 
 	for _, aff := range v.Affected {
-		if NormalizeName(aff.Package.Name) != pkg.Name {
+		if !sameName(ecosystem, aff.Package.Name, name) {
 			continue
 		}
 
 		for _, r := range aff.Ranges {
 			for _, ev := range r.Events {
 				fixed, ok := ev["fixed"]
-				if !ok || CompareVersions(fixed, pkg.Version) <= 0 {
+				if !ok || CompareVersions(fixed, version) <= 0 {
 					continue
 				}
 

@@ -40,7 +40,7 @@ stack.
 
 - Python: `poetry.lock`, `requirements.txt` with hashes, `pdm.lock`.
 - Go (`go.sum` + `govulncheck`-style symbol data, which Go advisories already carry).
-- npm (`package-lock.json`).
+- npm: coverage evidence (v8 / vitest coverage), `surface`, and `npm audit`-style fix paths. Basic `scan` of `package-lock.json` is done.
 
 ## Platform markers
 

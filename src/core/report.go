@@ -12,8 +12,26 @@ import (
 
 // Report is a whole scan's result.
 type Report struct {
-	Project  string    `json:"project"`
-	Findings []Finding `json:"findings"`
+	Project string `json:"project"`
+	// Ecosystem is the registry the packages come from (PyPI or npm); empty means PyPI.
+	Ecosystem string    `json:"ecosystem,omitempty"`
+	Findings  []Finding `json:"findings"`
+}
+
+// purl is the package URL for a package in the report's ecosystem, with the version when
+// one is given. Scoped npm names carry their "@" percent-encoded.
+func (r Report) purl(name, version string) string {
+	kind := "pypi"
+	if r.Ecosystem == EcosystemNPM {
+		kind = "npm"
+		name = strings.Replace(name, "@", "%40", 1)
+	}
+
+	if version == "" {
+		return "pkg:" + kind + "/" + name
+	}
+
+	return "pkg:" + kind + "/" + name + "@" + version
 }
 
 // AlertCount is the number of advisories - what Dependabot would show as separate alerts.
@@ -153,8 +171,8 @@ func (r Report) WriteVEX(w io.Writer, now time.Time) error {
 
 	for _, f := range r.Findings {
 		product := vexProduct{
-			ID:            "pkg:pypi/" + r.Project,
-			Subcomponents: []vexProduct{{ID: fmt.Sprintf("pkg:pypi/%s@%s", f.Package, f.Version)}},
+			ID:            r.purl(r.Project, ""),
+			Subcomponents: []vexProduct{{ID: r.purl(f.Package, f.Version)}},
 		}
 
 		for _, a := range f.Advisories {

@@ -11,7 +11,8 @@ Named for Jean-Luc Picard: weigh the reports, decide, make it so.
 
 ## What it checks
 
-For a [uv](https://docs.astral.sh/uv/) project (`uv.lock`):
+For a [uv](https://docs.astral.sh/uv/) project (`uv.lock`), or an npm project
+(`package-lock.json`, with fewer checks - see Limitations):
 
 1. **Advisories** - looks up every locked package version in [OSV](https://osv.dev) (the
    same GitHub advisory data Dependabot uses, plus PyPI's), and groups them by the upgrade
@@ -171,7 +172,11 @@ The VEX output is a *proposal* to review, not a decision: commit it once you agr
 - **Static imports only**: `importlib`/`__import__` aren't seen; coverage covers them.
 - **Platform markers are ignored**: a dependency only installed on Windows still counts as
   shipped. Conservative, never under-reports.
-- `uv.lock` only so far.
+- Lock files: `uv.lock` and npm's `package-lock.json` (lockfileVersion 2 or 3). For npm,
+  picard checks advisories, whether each package ships (runtime `dependencies` vs
+  `devDependencies`) and whether your own non-test JS/TS imports it; `--coverage`, `--assess`
+  and `surface` are Python-only for now. A package locked at several versions has each
+  looked up.
 
 ## Further reading
 
