@@ -40,7 +40,7 @@ func main() {
 				Aliases:   []string{"s"},
 				Usage:     "looks up advisories for a locked project and judges which ones reach it",
 				UsageText: "picard scan -d . [--coverage coverage.json] [--format table|json|vex]",
-				Flags: []cli.Flag{
+				Flags: append([]cli.Flag{
 					&cli.StringFlag{
 						Name:    "directory",
 						Aliases: []string{"d"},
@@ -62,61 +62,11 @@ func main() {
 						Usage:   "output format: table, json or vex (OpenVEX)",
 						Value:   "table",
 					},
-					&cli.BoolFlag{
-						Name:    "assess",
-						Aliases: []string{"a"},
-						Usage:   "have Claude read each shipped package's advisories and fixes (needs ANTHROPIC_API_KEY)",
-					},
-					&cli.StringFlag{
-						Name:  "deployment",
-						Usage: "deployment description checked against advisories (default: <directory>/picard.yaml if present)",
-					},
-					&cli.StringFlag{
-						Name:  "model",
-						Usage: "model for --assess",
-						Value: core.DefaultModel,
-					},
-					&cli.BoolFlag{
-						Name:  "no-cache",
-						Usage: "re-assess advisories instead of reusing cached assessments",
-					},
-				},
+				}, assessFlags...),
 				Action: func(c *cli.Context) error {
-					opts := core.Options{
-						Directory: c.String("directory"),
-						LockFile:  c.String("lock"),
-						Coverage:  c.String("coverage"),
-					}
-
-					if opts.Coverage != "" && !core.Exists(opts.Coverage) {
-						return fmt.Errorf("coverage report %s not found", opts.Coverage)
-					}
-
-					deployment := c.String("deployment")
-					if deployment == "" && core.Exists(filepath.Join(opts.Directory, "picard.yaml")) {
-						deployment = filepath.Join(opts.Directory, "picard.yaml")
-					}
-
-					if deployment != "" {
-						d, err := core.ReadDeployment(deployment)
-						if err != nil {
-							return err
-						}
-
-						opts.Deployment = d
-					}
-
-					if c.Bool("assess") {
-						if opts.Deployment == nil {
-							log.Warn().Msg("no picard.yaml deployment description - advisories' preconditions will mostly come out unclear")
-						}
-
-						var assessor core.Assessor = core.NewClaudeAssessor(c.String("model"))
-						if !c.Bool("no-cache") {
-							assessor = &core.CachedAssessor{Inner: assessor, Path: core.DefaultCachePath()}
-						}
-
-						opts.Assessor = assessor
+					opts, err := scanOptions(c)
+					if err != nil {
+						return err
 					}
 
 					report, err := core.Scan(opts)
@@ -134,6 +84,74 @@ func main() {
 					default:
 						return fmt.Errorf("unknown format %q (table, json or vex)", c.String("format"))
 					}
+				},
+			},
+			{
+				Name:  "dependabot",
+				Usage: "proposes an action for each of a repository's Dependabot alerts, and with --apply dismisses the ones that don't reach it",
+				UsageText: "picard dependabot -d path/to/checkout [--repo owner/name] [--apply | --apply-judged]\n" +
+					"   alerts are matched to picard's verdicts by advisory id; dry run unless --apply",
+				Flags: append([]cli.Flag{
+					&cli.StringFlag{Name: "directory", Aliases: []string{"d"}, Usage: "a checkout of the repository", Value: "."},
+					&cli.StringFlag{Name: "repo", Usage: "owner/name (default: the checkout's origin remote)"},
+					&cli.StringFlag{Name: "state", Usage: "alerts to process: open, fixed, dismissed (fixed + --lock replays past alerts)", Value: "open"},
+					&cli.StringFlag{Name: "lock", Usage: "use this lock file for every alert instead of the checkout's (replaying past alerts)"},
+					&cli.StringFlag{Name: "coverage", Aliases: []string{"c"}, Usage: "coverage.py JSON report for the Python lock"},
+					&cli.BoolFlag{Name: "apply", Usage: "dismiss alerts whose verdict rests on facts alone (not shipped)"},
+					&cli.BoolFlag{Name: "apply-judged", Usage: "also dismiss alerts whose verdict rests on coverage or a model's assessment"},
+					&cli.StringFlag{Name: "format", Aliases: []string{"f"}, Usage: "output format: table or json", Value: "table"},
+				}, assessFlags...),
+				Action: func(c *cli.Context) error {
+					opts, err := scanOptions(c)
+					if err != nil {
+						return err
+					}
+
+					repo := c.String("repo")
+					if repo == "" {
+						if repo, err = core.RepoFromGit(opts.Directory); err != nil {
+							return err
+						}
+					}
+
+					gh, err := core.NewGitHub()
+					if err != nil {
+						return err
+					}
+
+					decisions, err := core.PlanDependabot(gh, core.DependabotOptions{
+						Repo:      repo,
+						Directory: opts.Directory,
+						State:     c.String("state"),
+						Scan:      opts,
+						LockFile:  c.String("lock"),
+					})
+					if err != nil {
+						return err
+					}
+
+					var applyErr error
+					if c.Bool("apply") || c.Bool("apply-judged") {
+						applyErr = core.ApplyDecisions(gh, repo, decisions, c.Bool("apply-judged"))
+					}
+
+					switch c.String("format") {
+					case "json":
+						enc := json.NewEncoder(os.Stdout)
+						enc.SetIndent("", "  ")
+
+						if err := enc.Encode(decisions); err != nil {
+							return err
+						}
+					case "table":
+						if err := core.WriteDecisions(os.Stdout, repo, decisions); err != nil {
+							return err
+						}
+					default:
+						return fmt.Errorf("unknown format %q (table or json)", c.String("format"))
+					}
+
+					return applyErr
 				},
 			},
 			{
@@ -194,4 +212,68 @@ func main() {
 	if err := app.Run(os.Args); err != nil {
 		log.Fatal().Err(err).Msg("picard failed")
 	}
+}
+
+// assessFlags are shared by the commands that triage advisories.
+var assessFlags = []cli.Flag{
+	&cli.BoolFlag{
+		Name:    "assess",
+		Aliases: []string{"a"},
+		Usage:   "have Claude read each shipped package's advisories and fixes (needs ANTHROPIC_API_KEY)",
+	},
+	&cli.StringFlag{
+		Name:  "deployment",
+		Usage: "deployment description checked against advisories (default: <directory>/picard.yaml if present)",
+	},
+	&cli.StringFlag{
+		Name:  "model",
+		Usage: "model for --assess",
+		Value: core.DefaultModel,
+	},
+	&cli.BoolFlag{
+		Name:  "no-cache",
+		Usage: "re-assess advisories instead of reusing cached assessments",
+	},
+}
+
+// scanOptions builds triage options from the shared flags.
+func scanOptions(c *cli.Context) (core.Options, error) {
+	opts := core.Options{
+		Directory: c.String("directory"),
+		LockFile:  c.String("lock"),
+		Coverage:  c.String("coverage"),
+	}
+
+	if opts.Coverage != "" && !core.Exists(opts.Coverage) {
+		return opts, fmt.Errorf("coverage report %s not found", opts.Coverage)
+	}
+
+	deployment := c.String("deployment")
+	if deployment == "" && core.Exists(filepath.Join(opts.Directory, "picard.yaml")) {
+		deployment = filepath.Join(opts.Directory, "picard.yaml")
+	}
+
+	if deployment != "" {
+		d, err := core.ReadDeployment(deployment)
+		if err != nil {
+			return opts, err
+		}
+
+		opts.Deployment = d
+	}
+
+	if c.Bool("assess") {
+		if opts.Deployment == nil {
+			log.Warn().Msg("no picard.yaml deployment description - advisories' preconditions will mostly come out unclear")
+		}
+
+		var assessor core.Assessor = core.NewClaudeAssessor(c.String("model"))
+		if !c.Bool("no-cache") {
+			assessor = &core.CachedAssessor{Inner: assessor, Path: core.DefaultCachePath()}
+		}
+
+		opts.Assessor = assessor
+	}
+
+	return opts, nil
 }

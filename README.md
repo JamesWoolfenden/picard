@@ -104,6 +104,46 @@ setuptools 84.0.0: preconditions don't hold here: The path escape depends on Win
 drive-qualified absolute path semantics ... This deployment runs only on Linux ...
 ```
 
+## Dependabot: act on the alerts
+
+`picard dependabot` reads a repository's Dependabot alerts, scans each lock file they refer
+to, matches every alert to picard's verdict for the same advisory (by GHSA id, including
+OSV aliases), and proposes an action. It's a dry run unless asked:
+
+```shell
+picard dependabot -d path/to/checkout                 # propose
+picard dependabot -d . --apply                        # dismiss the fact-based ones
+picard dependabot -d . --assess --apply-judged        # also the judged ones - review first
+```
+
+| picard verdict | Proposal | Dismissed by |
+|---|---|---|
+| `not-shipped` | dismiss as `not_used` | `--apply` (a fact from the lock file) |
+| `not-executed`, `import-only` | dismiss as `not_used` | `--apply-judged` only (rests on a coverage run) |
+| `not-applicable` | dismiss as `tolerable_risk` | `--apply-judged` only (rests on a model's assessment) |
+| `reachable`, `shipped` | keep open | - |
+
+Each dismissal carries picard's reason as its comment (Dependabot allows 280 characters),
+so whoever reads the alert later sees why. Alerts on manifests picard can't read yet, or
+whose advisory picard doesn't find at the locked version, are skipped, not dismissed.
+
+Needs a GitHub token (`GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`); dismissing needs
+write access to Dependabot alerts. `--state fixed --lock old/uv.lock` replays past alerts
+against an old lock, for checking picard's proposals against decisions already made.
+
+ghat (a live alert, October 2026):
+
+```text
+JamesWoolfenden/ghat: 1 alerts - 0 keep open, 1 dismiss, 0 dismiss on judgement, 0 skipped
+
+ALERT  PACKAGE           SEVERITY  VERDICT      ACTION              MANIFEST
+#78    @azure/msal-node  high      not-shipped  dismiss (not_used)  editors/vscode/package-lock.json
+
+#78 GHSA-xcx6-jx8p-x3h5 (MSAL Node authorization code flow may disclose parameters to an
+attacker-controlled endpoint): only pulled in by dev/test dependencies (@vscode/vsce →
+@azure/identity → @azure/msal-node), so not in a production install
+```
+
 ## Surface: what each dependency costs
 
 Triage makes alerts cheaper; `picard surface` is for having fewer of them. For each direct

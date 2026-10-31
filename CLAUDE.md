@@ -24,6 +24,10 @@ Module path: `github.com/jameswoolfenden/picard`
   since advisories describe vulnerabilities and a refusal is possible)
 - `triage.go` - evidence -> per-advisory and per-package Verdict
 - `report.go` - table, JSON and OpenVEX output
+- `github.go`, `dependabot.go` - `picard dependabot`: list a repo's alerts, match them to
+  verdicts by GHSA id, propose/apply dismissals (fact-based with `--apply`, judged ones only
+  with `--apply-judged`). Never dismiss real alerts while testing - dry-run, or use
+  `--state fixed --lock <old lock>`.
 - `surface.go`, `surface_scan.go` - `picard surface`: what each direct dependency alone
   brings in (packages, native code, size, advisory history, use) and undeclared imports
 - `scan.go` - wires it together

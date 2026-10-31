@@ -135,6 +135,29 @@ Per advisory, first match wins:
 A package's verdict is its most serious advisory's: `reachable` > `shipped` >
 `import-only` > `not-executed` > `not-applicable` > `not-shipped`.
 
+## Dependabot (`github.go`, `dependabot.go`)
+
+`picard dependabot` closes the loop from verdict to action on GitHub.
+
+- **Alerts** are listed through the Dependabot alerts REST API (paginated via `Link`).
+- **Lock per alert.** Each alert names its manifest; picard reads it when it's a lock it
+  understands (`uv.lock`, `package-lock.json`), or the lock beside a `pyproject.toml` /
+  `package.json`. One scan per lock, run from that lock's directory so imports are the
+  right project's. Anything else is skipped with a reason - never dismissed.
+- **Matching** is by advisory id: OSV's id or any of its aliases equals the alert's GHSA
+  id, for the same package (names compared per ecosystem). No match - typically the lock
+  already has the fix - means skip.
+- **Two tiers of automation.** A `not-shipped` verdict is a fact from the lock graph, so
+  `--apply` dismisses it. Verdicts resting on a coverage run or a model's assessment are
+  dismissed only with `--apply-judged`, because they're exactly as good as that evidence.
+  Dependabot's `not_used` and `tolerable_risk` reasons carry picard's reasoning as the
+  dismissal comment (truncated to Dependabot's 280 characters).
+- **Dry run by default**, and failures to dismiss one alert don't stop the rest.
+
+Replaying pan's 19 fixed alerts against its pre-fix lock matched all 19 to picard's
+advisories: certifi kept open, the 18 filelock/setuptools alerts proposed as
+`tolerable_risk` on judgement - the same calls made by hand.
+
 ## Surface (`surface.go`, `surface_scan.go`)
 
 Triage reduces the cost of alerts; surface reduces their number, by showing what each

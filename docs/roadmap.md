@@ -50,6 +50,9 @@ conservative.
 
 ## Integration
 
+Done: `picard dependabot` proposes and (with `--apply` / `--apply-judged`) dismisses
+Dependabot alerts. Still to do:
+
 - **pan**: commit `picard.yaml` and the reviewed VEX file; run picard in CI.
 - **picard's own CI**: GitHub Actions with tests on push, actions pinned with `ghat swot`.
 - **AI-context output** (`--format ai-context`) like holden's, for use inside assistants.
