@@ -212,17 +212,27 @@ picard surface -d . --coverage coverage.json --detail
 picard surface -d . --format json
 ```
 
-pan, with its test coverage:
+pan:
 
 ```text
 pan ships 88 packages (linux x86_64, Python 3.12). What each direct dependency alone brings in:
 
-DEPENDENCY                      PACKAGES  NATIVE  SIZE        PAST ADVISORIES  USED     FUNCTIONS CALLED
-sentence-transformers (+torch)  26        6       >= 35.5 MB  178              2 names  1748
-librosa                         12        5       65.0 MB     3                1 name   6
-anthropic                       8         1       2.5 MB      16               1 name   13
-uvicorn                         5         4       5.9 MB      8                command  0
+DEPENDENCY                      PACKAGES  NATIVE  SIZE        ADVISORIES  LAST 3Y         USED
+sentence-transformers (+torch)  26        6       >= 35.6 MB  112         94 (40 events)  3 names
+librosa                         12        5       65.0 MB     2           2               4 names
+anthropic                       8         1       2.5 MB      8           8 (3 events)    1 name
+uvicorn                         5         4       5.9 MB      4           0               command
+fastapi                         3         0       0.3 MB      13          10 (7 events)   6 names
 ...
+
+Little used for what it costs - is there something lighter, or a few lines of your own?
+  sentence-transformers (+torch)
+    uses 3 names (httpx.Client, httpx.ConnectError, sentence_transformers.SentenceTransformer); alone brings in 26
+    packages; 6 with native code; 94 advisories in the last 3 years (40 separate events, 17 high or critical)
+  librosa
+    uses 4 names (librosa.beat, librosa.feature, librosa.load, librosa.resample); alone brings in 12 packages; 5 with
+    native code; 65.0 MB; 2 advisories in the last 3 years (2 high or critical)
+  ...
 
 Undeclared imports - declare them, or removing what brings them in breaks the code:
   httpx  via sentence-transformers → huggingface-hub → httpx
@@ -232,11 +242,25 @@ Then, per dependency, what it brings in (`cryptography*(42)`: native code, 42 pa
 advisories; `pywin32?`: no wheel for the target platform, so probably not installed there)
 and the names the code uses from it.
 
+- **Advisories** are every advisory the group's packages have ever had, with a record filed
+  by several databases (GHSA, PYSEC) counted once. **Last 3y** is the recent ones; *events*
+  count each package's advisories published within a week of each other once, so an audit
+  that files 17 at a time reads as one event, not 17.
+- **Little used for what it costs**: used lightly (5 names or fewer, no command run) *and*
+  heavy on at least one count - 10+ packages alone, 50 MB+, 3+ advisory events or 2+ high or
+  critical advisories in the last 3 years. The facts are listed; whether something else
+  would do is a judgement picard leaves to you (or the picard-triage skill). Don't swap
+  cryptography, TLS or parsing of untrusted input for code of your own, however little of it
+  you use.
+- **No use found**: removable, but nothing imports it or runs its commands - unused, or
+  loaded by name (a plugin, a driver, a server extra).
+
 - **Groups** - a direct dependency only another one needs goes with it: pan lists torch
   directly, but it's only there for sentence-transformers, so they're costed together.
 - **Extras** count: `uvicorn[standard]`'s uvloop, httptools, watchfiles and websockets are
   attributed to uvicorn.
-- **Used** is names imported from it, plus whether one of its console commands appears in
+- **Used** is names imported from it - for a bare `import x`, the `x.name`s the code
+  references - plus whether one of its console commands appears in
   the Dockerfile/Makefile/compose file (uvicorn is run, not imported).
 - **Undeclared** imports - code importing a package it doesn't depend on - are flagged,
   because they're exactly what breaks when you remove the dependency that happened to

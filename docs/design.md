@@ -211,14 +211,28 @@ direct dependency costs.
   *native* (a platform-specific wheel is compiled code) and *size* (unknown when the index
   doesn't publish it, e.g. PyTorch's, shown as `>=`).
 - **History.** Every advisory ever published against each package, from OSV's batch API
-  without a version (paged) - the churn signal, as opposed to current exposure.
+  without a version (paged), each fetched for its publication date and severity and merged
+  by alias, as in `scan` - the churn signal, as opposed to current exposure. Churn is the
+  last three years, with each package's advisories published within a week of each other
+  counted as one event: filelock's audit filed 17 at once, which says something different
+  from 17 found one by one. Raw counts favour obscurity - well-scrutinised packages collect
+  advisories - so events and severity carry the signal, not the total.
 - **Use.** Names imported from the group's modules (multi-line, aliased and commented
-  `from x import (...)` handled), functions called in coverage, and console commands: each
+  `from x import (...)` handled; for `import x [as y]`, the `x.name` / `y.name` references
+  in the file), functions called in coverage, and console commands: each
   installed package's `entry_points.txt` `[console_scripts]`, matched as words in the
   Dockerfile, Makefile, compose and launch scripts.
 - **Undeclared imports.** Production imports of a locked package that isn't a direct
   dependency - flagged with the chain providing it, or as failing in production when only
   dev dependencies provide it. These are the hidden coupling that breaks a removal.
+- **Review** (`churn.go`). Not a score - a weighted sum would hide its reasons and invite
+  arguing about weights. Two rules, each listing the facts that triggered it: *little used
+  for what it costs* (light use - five names or fewer, no command - and at least one heavy
+  count: packages, size, recent advisory events, recent high/critical), and *no use found*.
+  They say a dependency is worth a look; what to use instead (the standard library, a
+  lighter package, a few lines of code, a smaller runtime for the same model) is judgement,
+  and some things - cryptography, TLS, untrusted-input parsers - shouldn't be hand-rolled
+  however little is used.
 
 ## Output (`report.go`)
 

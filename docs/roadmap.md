@@ -10,14 +10,15 @@ README and design doc.
 
 ## Churn, beyond a total count
 
-`surface` counts each package's past advisories. Still to do:
+Done: `surface` counts advisories over the last three years, merged across databases, with
+bursts (an audit filing many at once) counted as one event and high/critical counted
+separately, and flags dependencies little used for what they cost. Still to do:
 
-- advisories per year rather than all-time, and the share that were low severity or
-  local-attacker-only (as assessed);
-- bursts - many advisories published together (an audit sweep of one subsystem, like
-  filelock's 17) versus a steady trickle;
-- release cadence and project health from [deps.dev](https://deps.dev) and OpenSSF
-  Scorecard (maintainers, release frequency, scorecard checks) - free APIs.
+- the share that were local-attacker-only or otherwise rarely relevant (as assessed);
+- release cadence, major versions per year and project health from
+  [deps.dev](https://deps.dev) and OpenSSF Scorecard (maintainers, release frequency,
+  scorecard checks) - free APIs;
+- a picard-triage step that takes the flagged dependencies and proposes replacements.
 
 The output would separate "noisy but rarely relevant" from "rarely flagged, so pay attention
 when it is", and could feed a default stance per package.

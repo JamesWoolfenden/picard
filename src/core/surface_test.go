@@ -1,9 +1,12 @@
 package core
 
 import (
+	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 func panSurface(t *testing.T) SurfaceReport {
@@ -22,8 +25,28 @@ func panSurface(t *testing.T) SurfaceReport {
 		},
 		Owners:   map[string]string{"sentence_transformers": "sentence-transformers"},
 		Commands: map[string]bool{"uvicorn": true},
-		History:  map[string]int{"filelock": 22, "torch": 43},
+		History: map[string][]PastAdvisory{
+			// filelock's audit: 17 in one week, then 5 older ones.
+			"filelock": append(pastAdvisories(17, testNow.AddDate(0, -2, 0), time.Hour, "moderate"),
+				pastAdvisories(5, testNow.AddDate(-5, 0, 0), 30*24*time.Hour, "low")...),
+			// torch: a steady trickle, a month apart, the last three high.
+			"torch": append(pastAdvisories(40, testNow.AddDate(-8, 0, 0), 60*24*time.Hour, "moderate"),
+				pastAdvisories(3, testNow.AddDate(0, -6, 0), 30*24*time.Hour, "high")...),
+		},
+		Now: testNow,
 	}, Target{OS: "linux", Arch: "x86_64", Python: "3.12"})
+}
+
+var testNow = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+
+// pastAdvisories makes n advisories published every gap from start.
+func pastAdvisories(n int, start time.Time, gap time.Duration, severity string) []PastAdvisory {
+	out := make([]PastAdvisory, n)
+	for i := range out {
+		out[i] = PastAdvisory{ID: fmt.Sprintf("GHSA-%s-%d", severity, i), Published: start.Add(time.Duration(i) * gap), Severity: severity}
+	}
+
+	return out
 }
 
 func entry(r SurfaceReport, dep string) Surface {
@@ -64,12 +87,86 @@ func TestSurfaceGroupsDirectDependenciesThatOnlyGoTogether(t *testing.T) {
 		t.Error("numpy is shared with librosa, so it can't be attributed to sentence-transformers alone")
 	}
 
-	if st.AdvisoryHistory() != 65 {
-		t.Errorf("history = %d, want 65 (filelock 22 + torch 43)", st.AdvisoryHistory())
+	if st.Churn.Total != 65 {
+		t.Errorf("history = %d, want 65 (filelock 22 + torch 43)", st.Churn.Total)
 	}
 
 	if torch := entry(r, "torch"); len(torch.Packages) != 0 || !reflect.DeepEqual(torch.SharedWith, []string{"sentence-transformers"}) {
 		t.Errorf("torch alone = %+v, want nothing, shared with sentence-transformers", torch)
+	}
+}
+
+// Recent advisories count per event: filelock's 17-in-a-week audit is one, torch's three a
+// month apart are three; torch's trickle from 8 years ago mostly falls outside the window.
+func TestSurfaceChurnCountsBurstsOnce(t *testing.T) {
+	c := entry(panSurface(t), "sentence-transformers").Churn
+
+	// torch's trickle: 40 every 60 days from 8 years back reaches the window for its last
+	// few; count them rather than hard-code the calendar.
+	trickle := 0
+	for i := range 40 {
+		if !testNow.AddDate(-8, 0, 0).Add(time.Duration(i) * 60 * 24 * time.Hour).Before(testNow.AddDate(-3, 0, 0)) {
+			trickle++
+		}
+	}
+
+	want := Churn{Total: 65, Recent: 17 + 3 + trickle, Events: 1 + 3 + trickle, Severe: 3}
+	if c != want {
+		t.Errorf("churn = %+v, want %+v", c, want)
+	}
+}
+
+// sentence-transformers: one name used, dozens of packages, native code, a heavy record -
+// flagged to replace. uvicorn runs as a command, so it isn't; a dependency nothing uses is
+// flagged unused.
+func TestSurfaceReviewsLittleUsedHeavyDependencies(t *testing.T) {
+	r := panSurface(t)
+
+	st := entry(r, "sentence-transformers")
+	if st.Review == nil || st.Review.Kind != "replace" {
+		t.Fatalf("sentence-transformers review = %+v, want replace", st.Review)
+	}
+
+	reasons := strings.Join(st.Review.Reasons, "; ")
+	// httpx counts: only sentence-transformers brings it in (see the undeclared imports).
+	for _, want := range []string{"uses 2 names (httpx, sentence_transformers.SentenceTransformer)", "alone brings in",
+		"native code", "high or critical"} {
+		if !strings.Contains(reasons, want) {
+			t.Errorf("reasons %q missing %q", reasons, want)
+		}
+	}
+
+	if u := entry(r, "uvicorn"); u.Review != nil {
+		t.Errorf("uvicorn is run as a command: review = %+v", u.Review)
+	}
+
+	unused := 0
+
+	for _, s := range r.Entries {
+		if s.Review != nil && s.Review.Kind == "unused" {
+			unused++
+
+			if len(s.UsedNames) != 0 || s.Command {
+				t.Errorf("%s flagged unused but used", s.Dependency)
+			}
+		}
+	}
+
+	if unused == 0 {
+		t.Error("pan's test imports name only a few dependencies - the rest should be flagged unused")
+	}
+}
+
+// Light use alone isn't enough: a small dependency with a quiet record isn't flagged.
+func TestReviewNeedsAHeavyCost(t *testing.T) {
+	s := Surface{
+		Dependency: "tiny",
+		Packages:   []SurfacePackage{{Name: "tiny", Native: "no", Size: 1e4}},
+		UsedNames:  []string{"tiny.f"},
+	}
+
+	if r := review(s, true); r != nil {
+		t.Errorf("review = %+v, want none", r)
 	}
 }
 
@@ -173,6 +270,24 @@ func TestImportedNamesHandlesParensAliasesAndComments(t *testing.T) {
 		"numpy":                          true,
 	}
 
+	if !reflect.DeepEqual(imports.ProductionNames, want) {
+		t.Errorf("names = %v, want %v", imports.ProductionNames, want)
+	}
+}
+
+// `import x` counts the x.names the code uses, through an alias too; a.b.c's own dots and
+// another object's attribute (self.np.x) don't count.
+func TestImportedNamesCountsAttributesOfBareImports(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "audio.py"), "import librosa\nimport numpy as np\nimport os.path\n\n"+
+		"y, sr = librosa.load(p)\ntempo = librosa.beat.beat_track(y=y)\nz = np.zeros(3)\nself.np.ignored\nos.path.join(a)\n")
+
+	imports, err := ScanImports(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]bool{"librosa.load": true, "librosa.beat": true, "numpy.zeros": true, "os.path": true}
 	if !reflect.DeepEqual(imports.ProductionNames, want) {
 		t.Errorf("names = %v, want %v", imports.ProductionNames, want)
 	}

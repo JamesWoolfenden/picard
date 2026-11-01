@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -61,11 +62,12 @@ type osvQuery struct {
 }
 
 type osvVuln struct {
-	ID       string   `json:"id"`
-	Summary  string   `json:"summary"`
-	Details  string   `json:"details"`
-	Aliases  []string `json:"aliases"`
-	Affected []struct {
+	ID        string    `json:"id"`
+	Published time.Time `json:"published"`
+	Summary   string    `json:"summary"`
+	Details   string    `json:"details"`
+	Aliases   []string  `json:"aliases"`
+	Affected  []struct {
 		Package struct {
 			Name      string `json:"name"`
 			Ecosystem string `json:"ecosystem"`
@@ -260,9 +262,92 @@ func (a *Advisory) absorb(b Advisory) {
 	a.AffectedPackages = mergeNames(a.AffectedPackages, b.AffectedPackages)
 }
 
-// History counts every advisory ever published against each package, at any version - a
-// package's track record, as opposed to its current exposure.
-func (o *OSV) History(names []string) (map[string]int, error) {
+// History is every advisory ever published against each package, at any version - a
+// package's track record, as opposed to its current exposure. Each is fetched for its date
+// and severity, and records of one vulnerability from several databases count once.
+func (o *OSV) History(names []string) (map[string][]PastAdvisory, error) {
+	ids, err := o.historyIDs(names)
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+		vulns   = map[string]*osvVuln{}
+		failure error
+		sem     = make(chan struct{}, 8)
+	)
+
+	for _, list := range ids {
+		for _, id := range list {
+			mu.Lock()
+			_, seen := vulns[id]
+			vulns[id] = nil
+			mu.Unlock()
+
+			if seen {
+				continue
+			}
+
+			wg.Add(1)
+
+			go func() {
+				defer wg.Done()
+
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				v, err := o.vuln(id)
+
+				mu.Lock()
+				defer mu.Unlock()
+
+				if err != nil && failure == nil {
+					failure = err
+				}
+
+				vulns[id] = v
+			}()
+		}
+	}
+
+	wg.Wait()
+
+	if failure != nil {
+		return nil, failure
+	}
+
+	history := map[string][]PastAdvisory{}
+
+	for name, list := range ids {
+		advs := make([]Advisory, 0, len(list))
+		published := map[string]time.Time{}
+
+		for _, id := range list {
+			v := vulns[id]
+			advs = append(advs, toAdvisory(v, "PyPI", name, ""))
+			published[id] = v.Published
+		}
+
+		for _, a := range mergeAliases(advs) {
+			// The earliest of the records is when the vulnerability became public.
+			when := published[a.ID]
+			for _, alias := range a.Aliases {
+				if t, ok := published[alias]; ok && (when.IsZero() || t.Before(when)) {
+					when = t
+				}
+			}
+
+			history[name] = append(history[name], PastAdvisory{ID: a.ID, Published: when, Severity: a.Severity})
+		}
+	}
+
+	return history, nil
+}
+
+// historyIDs lists the ids OSV has against each package, at any version.
+func (o *OSV) historyIDs(names []string) (map[string][]string, error) {
 	type pkgQuery struct {
 		Package struct {
 			Name      string `json:"name"`
@@ -271,7 +356,7 @@ func (o *OSV) History(names []string) (map[string]int, error) {
 		PageToken string `json:"page_token,omitempty"`
 	}
 
-	counts := map[string]int{}
+	ids := map[string][]string{}
 	pending := make([]pkgQuery, len(names))
 	owner := make([]string, len(names))
 
@@ -305,7 +390,9 @@ func (o *OSV) History(names []string) (map[string]int, error) {
 				break
 			}
 
-			counts[owner[i]] += len(r.Vulns)
+			for _, v := range r.Vulns {
+				ids[owner[i]] = append(ids[owner[i]], v.ID)
+			}
 
 			if r.NextPageToken != "" {
 				q := pending[i]
@@ -318,7 +405,7 @@ func (o *OSV) History(names []string) (map[string]int, error) {
 		pending, owner = next, nextOwner
 	}
 
-	return counts, nil
+	return ids, nil
 }
 
 func (o *OSV) vuln(id string) (*osvVuln, error) {

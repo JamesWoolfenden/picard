@@ -52,7 +52,7 @@ func AnalyzeProjectSurface(opts SurfaceOptions) (*SurfaceReport, error) {
 		}
 	}
 
-	var history map[string]int
+	var history map[string][]PastAdvisory
 
 	if opts.History {
 		osv := opts.OSV

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 )
 
 // Target is the platform a production install runs on, for picking which wheel - and so
@@ -25,8 +26,10 @@ type SurfacePackage struct {
 	Native string `json:"native"` // "yes", "no", "unknown"
 	// Size of the target's wheel in bytes, 0 when the index didn't report one.
 	Size int64 `json:"size"`
-	// Advisories is every advisory ever published against the package, at any version.
-	Advisories int `json:"advisories"`
+	// Advisories is every advisory ever published against the package, at any version;
+	// History, each of them.
+	Advisories int            `json:"advisories"`
+	History    []PastAdvisory `json:"history,omitempty"`
 }
 
 // Surface is what one of the project's direct dependencies costs - everything that would
@@ -49,6 +52,10 @@ type Surface struct {
 	// Command: the project runs one of its console commands (found in the Dockerfile,
 	// Makefile and the like) - used from the command line rather than imported.
 	Command bool `json:"command"`
+	// Churn is the packages' advisory record; Review, set when the dependency looks unused
+	// or little used for what it costs.
+	Churn  Churn   `json:"churn"`
+	Review *Review `json:"review,omitempty"`
 }
 
 // Undeclared is a package the project's own code imports without depending on it
@@ -90,16 +97,6 @@ func (s Surface) Size() (total int64, complete bool) {
 	return total, complete
 }
 
-// AdvisoryHistory totals the packages' past advisories.
-func (s Surface) AdvisoryHistory() int {
-	n := 0
-	for _, p := range s.Packages {
-		n += p.Advisories
-	}
-
-	return n
-}
-
 // SurfaceReport ranks the project's direct dependencies by what they bring in.
 type SurfaceReport struct {
 	Project    string       `json:"project"`
@@ -116,7 +113,9 @@ type SurfaceEvidence struct {
 	Owners   map[string]string // module -> package
 	Commands map[string]bool   // packages whose console commands the project runs
 	Executed map[string]*ModuleUse
-	History  map[string]int // package -> past advisory count
+	History  map[string][]PastAdvisory // package -> every past advisory; nil when not looked up
+	// Now is when "recent" is measured from; zero means the current time.
+	Now time.Time
 }
 
 // AnalyzeSurface works out, for each direct dependency, what removing it would remove.
@@ -125,6 +124,11 @@ func AnalyzeSurface(ev SurfaceEvidence, target Target) SurfaceReport {
 	everything := lock.Closure(lock.Direct)
 	report := SurfaceReport{Project: lock.Project, Target: target, Total: len(everything)}
 	report.Undeclared = undeclaredImports(lock, imports, owners)
+
+	now := ev.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
 
 	for _, dep := range lock.Direct {
 		group := []string{dep}
@@ -192,6 +196,9 @@ func AnalyzeSurface(ev SurfaceEvidence, target Target) SurfaceReport {
 
 			sort.Strings(s.Called)
 		}
+
+		s.Churn = churnOf(s.Packages, now)
+		s.Review = review(s, history != nil)
 
 		report.Entries = append(report.Entries, s)
 	}
@@ -287,8 +294,8 @@ func namesFrom(imports *Imports, owners map[string]string, packages map[string]b
 	return names
 }
 
-func describePackage(pkg *Package, name string, target Target, history map[string]int) SurfacePackage {
-	sp := SurfacePackage{Name: name, Native: "unknown", Advisories: history[name]}
+func describePackage(pkg *Package, name string, target Target, history map[string][]PastAdvisory) SurfacePackage {
+	sp := SurfacePackage{Name: name, Native: "unknown", Advisories: len(history[name]), History: history[name]}
 	if pkg == nil {
 		return sp
 	}
@@ -400,7 +407,7 @@ func (r SurfaceReport) WriteTable(w io.Writer, detail bool) error {
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 
-	header := "DEPENDENCY\tPACKAGES\tNATIVE\tSIZE\tPAST ADVISORIES\tUSED"
+	header := "DEPENDENCY\tPACKAGES\tNATIVE\tSIZE\tADVISORIES\t" + fmt.Sprintf("LAST %dY", churnYears) + "\tUSED"
 	if coverage {
 		header += "\tFUNCTIONS CALLED"
 	}
@@ -413,8 +420,8 @@ func (r SurfaceReport) WriteTable(w io.Writer, detail bool) error {
 			name += " (+" + strings.Join(s.Also, ", +") + ")"
 		}
 
-		row := fmt.Sprintf("%s\t%d\t%d\t%s\t%d\t%s", name, len(s.Packages), s.Native(), formatSize(s),
-			s.AdvisoryHistory(), usedSummary(s))
+		row := fmt.Sprintf("%s\t%d\t%d\t%s\t%d\t%s\t%s", name, len(s.Packages), s.Native(), formatSize(s),
+			s.Churn.Total, recentSummary(s.Churn), usedSummary(s))
 		if coverage {
 			row += "\t" + fmt.Sprint(len(s.Called))
 		}
@@ -425,6 +432,8 @@ func (r SurfaceReport) WriteTable(w io.Writer, detail bool) error {
 	if err := tw.Flush(); err != nil {
 		return err
 	}
+
+	writeReviews(w, r.Entries, width)
 
 	listed := false
 
@@ -468,6 +477,54 @@ func (r SurfaceReport) WriteTable(w io.Writer, detail bool) error {
 	writeUndeclared(w, r.Undeclared, width)
 
 	return nil
+}
+
+// recentSummary is the recent advisories, with bursts noted: "17 (2 events)".
+func recentSummary(c Churn) string {
+	if c.Events < c.Recent {
+		return fmt.Sprintf("%d (%d %s)", c.Recent, c.Events, verb(c.Events, "event", "events"))
+	}
+
+	return fmt.Sprint(c.Recent)
+}
+
+// writeReviews lists the dependencies worth a second look, with the facts behind each.
+func writeReviews(w io.Writer, entries []Surface, width int) {
+	var unused, replace []Surface
+
+	for _, s := range entries {
+		switch {
+		case s.Review == nil:
+		case s.Review.Kind == "unused":
+			unused = append(unused, s)
+		default:
+			replace = append(replace, s)
+		}
+	}
+
+	for _, group := range []struct {
+		heading string
+		entries []Surface
+	}{
+		{"Little used for what it costs - is there something lighter, or a few lines of your own?", replace},
+		{"No use found:", unused},
+	} {
+		if len(group.entries) == 0 {
+			continue
+		}
+
+		fmt.Fprint(w, "\n"+wrap(group.heading, "", width))
+
+		for _, s := range group.entries {
+			name := s.Dependency
+			if len(s.Also) > 0 {
+				name += " (+" + strings.Join(s.Also, ", +") + ")"
+			}
+
+			fmt.Fprintf(w, "  %s\n", name)
+			fmt.Fprint(w, wrap(strings.Join(s.Review.Reasons, "; "), "    ", width))
+		}
+	}
 }
 
 // usedSummary is how the project uses a dependency: names imported, and whether it runs

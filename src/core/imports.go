@@ -94,11 +94,20 @@ func scanFile(path string, into, names map[string]bool) error {
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
+	var (
+		code     []string              // the lines that aren't imports
+		bindings = map[string]string{} // name bound by `import x [as y]` -> module
+	)
+
+	defer func() { addAttributeNames(names, bindings, code) }()
+
 	for scanner.Scan() {
 		line := stripComment(scanner.Text())
 
 		m := importRe.FindStringSubmatch(line)
 		if m == nil {
+			code = append(code, line)
+
 			continue
 		}
 
@@ -127,13 +136,45 @@ func scanFile(path string, into, names map[string]bool) error {
 				addModule(into, fields[0])
 
 				if names != nil && !strings.HasPrefix(fields[0], ".") {
-					names[fields[0]] = true
+					// `import a.b` binds a; `import a.b as c` binds c to a.b.
+					binding, module := strings.SplitN(fields[0], ".", 2)[0], strings.SplitN(fields[0], ".", 2)[0]
+					if len(fields) == 3 && fields[1] == "as" {
+						binding, module = fields[2], fields[0]
+					}
+
+					bindings[binding] = module
 				}
 			}
 		}
 	}
 
 	return scanner.Err()
+}
+
+// addAttributeNames records what a bare `import x` actually uses: each `x.name` in the
+// file's code, as "x.name". A module imported but never referenced that way is recorded
+// as itself, so it still counts as used.
+func addAttributeNames(names map[string]bool, bindings map[string]string, code []string) {
+	if names == nil {
+		return
+	}
+
+	text := strings.Join(code, "\n")
+
+	for binding, module := range bindings {
+		re := regexp.MustCompile(`(?:^|[^\w.])` + regexp.QuoteMeta(binding) + `\.([A-Za-z_]\w*)`)
+
+		found := false
+
+		for _, m := range re.FindAllStringSubmatch(text, -1) {
+			names[module+"."+m[1]] = true
+			found = true
+		}
+
+		if !found {
+			names[module] = true
+		}
+	}
 }
 
 // stripComment drops a trailing "# ..." - import lines have no string literals to confuse it.
