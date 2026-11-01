@@ -62,3 +62,13 @@ jobs:
         with:
           version: '~> v2'
           args: release --snapshot --clean --skip=publish
+  action:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run picard on itself
+        uses: ./
+        with:
+          version: ${{ github.sha }}

@@ -1,0 +1,65 @@
+name: picard
+author: James Woolfenden
+description: Look up advisories for locked dependencies (uv.lock, package-lock.json, go.mod) and fail when one reaches the code that ships.
+
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  directories:
+    description: Project directories to scan, one per line. Each holds a uv.lock, package-lock.json or go.mod.
+    required: false
+    default: .
+  fail-on:
+    description: "Verdicts that fail the run: reachable (the build calls vulnerable code), shipped (reachable, shipped or not-executed - anything in the production install), or never."
+    required: false
+    default: reachable
+  version:
+    description: picard version to install (a tag, a commit or latest).
+    required: false
+    default: latest
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: stable
+    - name: Install picard
+      shell: bash
+      env:
+        GOTOOLCHAIN: auto
+        PICARD_VERSION: ${{ inputs.version }}
+      run: go install "github.com/jameswoolfenden/picard@${PICARD_VERSION}"
+    - name: Scan
+      shell: bash
+      env:
+        GOTOOLCHAIN: auto
+        PICARD_DIRS: ${{ inputs.directories }}
+        PICARD_FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        export PATH="$(go env GOPATH)/bin:$PATH"
+        case "$PICARD_FAIL_ON" in
+          reachable) gate='reachable' ;;
+          shipped)   gate='reachable|shipped|not-executed' ;;
+          never)     gate='' ;;
+          *) echo "::error::fail-on must be reachable, shipped or never"; exit 2 ;;
+        esac
+        status=0
+        while IFS= read -r dir; do
+          [ -z "$dir" ] && continue
+          echo "::group::picard scan $dir"
+          picard scan -d "$dir" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ -n "$gate" ]; then
+            hits=$(picard scan -d "$dir" -f json | jq -r --arg g "$gate" \
+              '.findings[]? | select(.verdict | test("^(" + $g + ")$")) | "\(.package) \(.version) \(.verdict) fix: \(.fix_version // "none")"')
+            if [ -n "$hits" ]; then
+              while IFS= read -r h; do echo "::error title=picard ($dir)::$h"; done <<< "$hits"
+              status=1
+            fi
+          fi
+          echo "::endgroup::"
+        done <<< "$PICARD_DIRS"
+        exit $status
