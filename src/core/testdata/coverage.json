@@ -1,0 +1,24 @@
+{
+  "files": {
+    "/app/.venv/lib/python3.12/site-packages/certifi/core.py": {
+      "executed_lines": [1, 2, 5],
+      "functions": {
+        "": {"executed_lines": [1, 2, 5]},
+        "where": {"executed_lines": []}
+      }
+    },
+    "/app/.venv/lib/python3.12/site-packages/filelock/_api.py": {
+      "executed_lines": [1, 10, 11],
+      "functions": {
+        "": {"executed_lines": [1]},
+        "BaseFileLock.acquire": {"executed_lines": [10, 11]},
+        "BaseFileLock.release": {"executed_lines": []}
+      }
+    },
+    "/app/backend/app.py": {
+      "executed_lines": [1],
+      "functions": {"": {"executed_lines": [1]}}
+    }
+  },
+  "meta": {"format": 3, "version": "7.17.0"}
+}

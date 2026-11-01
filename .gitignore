@@ -8,4 +8,5 @@ bin/
 .DS_Store
 __debug_bin.exe
 coverage.json
+!src/core/testdata/coverage.json
 .coverage
