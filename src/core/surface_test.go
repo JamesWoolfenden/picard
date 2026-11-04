@@ -407,3 +407,121 @@ func TestNPMSurfaceHasNoWheelColumns(t *testing.T) {
 		}
 	}
 }
+
+func decisionFixture() (*Lock, map[string][]string) {
+	lock := &Lock{
+		Project: "app", Ecosystem: EcosystemNPM, Direct: []string{"big"},
+		Packages: map[string]*Package{"big": {Name: "big", Version: "1", Deps: []string{"a", "b"}},
+			"a": {Name: "a", Version: "1"}, "b": {Name: "b", Version: "1"}},
+	}
+
+	return lock, map[string][]string{"big": {"big/x"}}
+}
+
+func flagged(t *testing.T, decisions []Decision) Surface {
+	t.Helper()
+
+	lock, used := decisionFixture()
+	history := map[string][]PastAdvisory{"a": {
+		{ID: "1", Published: time.Now().AddDate(0, -1, 0), Severity: "high"},
+		{ID: "2", Published: time.Now().AddDate(0, -2, 0), Severity: "critical"},
+	}}
+
+	report := AnalyzeSurface(SurfaceEvidence{Lock: lock, UsedBy: used, History: history, Decisions: decisions}, Target{})
+
+	for _, e := range report.Entries {
+		if e.Dependency == "big" {
+			return e
+		}
+	}
+
+	t.Fatal("big not in report")
+
+	return Surface{}
+}
+
+func TestDecisionDecisionSettlesAFlagWhileTheFactsHold(t *testing.T) {
+	entry := Decision{Dependency: "big", Decision: DecisionKeep, Date: "2026-11-04", Reason: "needed",
+		Baseline: &Baseline{Packages: 3, RecentSevere: 2}}
+
+	s := flagged(t, []Decision{entry})
+	if s.Review == nil {
+		t.Fatal("the facts should still be reported")
+	}
+
+	if s.Decided == nil || s.DecidedStale != "" {
+		t.Fatalf("decided = %+v stale = %q, want a current decision", s.Decided, s.DecidedStale)
+	}
+
+	var out strings.Builder
+	writeReviews(&out, []Surface{s}, 120)
+
+	if !strings.Contains(out.String(), "decided") || !strings.Contains(out.String(), "keep (2026-11-04): needed") {
+		t.Errorf("table should show the decision and its reason:\n%s", out.String())
+	}
+
+	if strings.Contains(out.String(), "Little used for what it costs") {
+		t.Errorf("a settled decision should not sit under the open flag:\n%s", out.String())
+	}
+}
+
+func TestDecisionDecisionGoesStaleWhenFactsGrow(t *testing.T) {
+	entry := Decision{Dependency: "big", Decision: DecisionKeep, Date: "2026-11-04", Reason: "needed",
+		Baseline: &Baseline{Packages: 3, RecentSevere: 0}}
+
+	s := flagged(t, []Decision{entry})
+	if !strings.Contains(s.DecidedStale, "2 recent high or critical advisories, was 0") {
+		t.Fatalf("stale = %q", s.DecidedStale)
+	}
+
+	var out strings.Builder
+	writeReviews(&out, []Surface{s}, 120)
+
+	if !strings.Contains(out.String(), "no longer matches the facts") ||
+		!strings.Contains(out.String(), "Little used for what it costs") {
+		t.Errorf("a stale decision should reopen the flag with the reason:\n%s", out.String())
+	}
+}
+
+func TestDecisionReplaceDoesNotSettle(t *testing.T) {
+	s := flagged(t, []Decision{{Dependency: "big", Decision: DecisionReplace, Date: "2026-11-04", Reason: "planned"}})
+
+	var out strings.Builder
+	writeReviews(&out, []Surface{s}, 120)
+
+	if !strings.Contains(out.String(), "Little used for what it costs") || !strings.Contains(out.String(), "replace (2026-11-04)") {
+		t.Errorf("a decision to replace keeps the flag and shows the decision:\n%s", out.String())
+	}
+}
+
+func TestDecisionValidate(t *testing.T) {
+	good := Decision{Dependency: "x", Decision: DecisionDefer, Date: "2026-11-04", Reason: "r"}
+	if err := good.Validate(); err != nil {
+		t.Errorf("valid entry rejected: %v", err)
+	}
+
+	for name, bad := range map[string]Decision{
+		"no dependency": {Decision: DecisionKeep, Date: "d", Reason: "r"},
+		"no reason":     {Dependency: "x", Decision: DecisionKeep, Date: "d"},
+		"no date":       {Dependency: "x", Decision: DecisionKeep, Reason: "r"},
+		"bad decision":  {Dependency: "x", Decision: "ignore", Date: "d", Reason: "r"},
+	} {
+		if bad.Validate() == nil {
+			t.Errorf("%s: want an error", name)
+		}
+	}
+}
+
+func TestDescribeLeavesDecisionsOutOfAssessments(t *testing.T) {
+	d := &Deployment{Platform: "linux", Decisions: []Decision{{Dependency: "x", Decision: DecisionKeep, Date: "d", Reason: "r"}}}
+	if strings.Contains(d.Describe(), "decisions") {
+		t.Errorf("assessment prompt should not carry decisions:\n%s", d.Describe())
+	}
+}
+
+func TestDecisionsOnlyPicardYamlIsNoDeploymentDescription(t *testing.T) {
+	d := &Deployment{Decisions: []Decision{{Dependency: "x", Decision: DecisionKeep, Date: "d", Reason: "r"}}}
+	if d.Describe() != (*Deployment)(nil).Describe() {
+		t.Errorf("a file of decisions must not read as a deployment with no risky facts:\n%s", d.Describe())
+	}
+}

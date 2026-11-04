@@ -27,6 +27,9 @@ type Deployment struct {
 	UntrustedInput []string `yaml:"untrusted_input" json:"untrusted_input,omitempty"`
 	// Notes is anything else worth knowing, in prose.
 	Notes string `yaml:"notes" json:"notes,omitempty"`
+	// Decisions records decisions about dependencies the surface review flagged. It is not
+	// a deployment fact, so it is left out of what assessments see.
+	Decisions []Decision `yaml:"decisions,omitempty" json:"decisions,omitempty"`
 }
 
 // ReadDeployment reads a picard.yaml.
@@ -41,16 +44,25 @@ func ReadDeployment(path string) (*Deployment, error) {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
 
+	for _, a := range d.Decisions {
+		if err := a.Validate(); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+	}
+
 	return &d, nil
 }
 
 // Describe renders the deployment for an assessment prompt.
 func (d *Deployment) Describe() string {
-	if d == nil {
+	if d == nil || d.empty() {
 		return "Unknown - no deployment description given. Treat every precondition as possibly met."
 	}
 
-	data, _ := yaml.Marshal(d)
+	facts := *d
+	facts.Decisions = nil
+
+	data, _ := yaml.Marshal(facts)
 
 	return string(data)
 }
@@ -61,4 +73,11 @@ func (d *Deployment) Hash() string {
 	sum := sha256.Sum256([]byte(d.Describe()))
 
 	return hex.EncodeToString(sum[:8])
+}
+
+// empty: no deployment fact is stated (decisions alone don't count), so a picard.yaml that
+// only records decisions means the same as none.
+func (d *Deployment) empty() bool {
+	return d.Platform == "" && !d.Container && !d.SharedHost && !d.OutboundTLS &&
+		len(d.Exposed) == 0 && len(d.UntrustedInput) == 0 && d.Notes == ""
 }

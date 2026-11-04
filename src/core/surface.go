@@ -58,6 +58,10 @@ type Surface struct {
 	// or little used for what it costs.
 	Churn  Churn   `json:"churn"`
 	Review *Review `json:"review,omitempty"`
+	// Decided is the recorded decision about this dependency, if any; DecidedStale says why
+	// the facts no longer match it.
+	Decided      *Decision `json:"decided,omitempty"`
+	DecidedStale string    `json:"decided_stale,omitempty"`
 }
 
 // Undeclared is a package the project's own code imports without depending on it
@@ -128,6 +132,8 @@ type SurfaceEvidence struct {
 	Commands map[string]bool   // packages whose console commands the project runs
 	Executed map[string]*ModuleUse
 	History  map[string][]PastAdvisory // package -> every past advisory; nil when not looked up
+	// Decisions are the recorded decisions from picard.yaml.
+	Decisions []Decision
 	// UsedBy are the import paths the project's code uses from each Go module or npm
 	// package; nil for Python, which works from Imports and Owners.
 	UsedBy map[string][]string
@@ -228,6 +234,11 @@ func AnalyzeSurface(ev SurfaceEvidence, target Target) SurfaceReport {
 
 		s.Churn = churnOf(s.Packages, now)
 		s.Review = review(s, history != nil)
+
+		if a := matchDecision(ev.Decisions, s); a != nil {
+			s.Decided = a
+			s.DecidedStale = a.Stale(s)
+		}
 
 		report.Entries = append(report.Entries, s)
 	}
@@ -549,11 +560,13 @@ func recentSummary(c Churn) string {
 
 // writeReviews lists the dependencies worth a second look, with the facts behind each.
 func writeReviews(w io.Writer, entries []Surface, width int) {
-	var unused, replace []Surface
+	var unused, replace, decided []Surface
 
 	for _, s := range entries {
 		switch {
 		case s.Review == nil:
+		case s.Decided != nil && s.Decided.Settles() && s.DecidedStale == "":
+			decided = append(decided, s)
 		case s.Review.Kind == "unused":
 			unused = append(unused, s)
 		default:
@@ -567,6 +580,7 @@ func writeReviews(w io.Writer, entries []Surface, width int) {
 	}{
 		{"Little used for what it costs - is there something lighter, or a few lines of your own?", replace},
 		{"No use found:", unused},
+		{"Flagged, and decided (picard.yaml) - the facts are unchanged:", decided},
 	} {
 		if len(group.entries) == 0 {
 			continue
@@ -582,6 +596,18 @@ func writeReviews(w io.Writer, entries []Surface, width int) {
 
 			fmt.Fprintf(w, "  %s\n", name)
 			fmt.Fprint(w, wrap(strings.Join(s.Review.Reasons, "; "), "    ", width))
+
+			if a := s.Decided; a != nil {
+				if s.DecidedStale != "" {
+					fmt.Fprint(w, wrap("decision no longer matches the facts: "+s.DecidedStale+" - was "+a.Summary(), "    ", width))
+				} else {
+					fmt.Fprint(w, wrap("decision: "+a.Summary(), "    ", width))
+				}
+
+				if a.Revisit != "" {
+					fmt.Fprint(w, wrap("revisit if: "+strings.TrimSpace(a.Revisit), "    ", width))
+				}
+			}
 		}
 	}
 }

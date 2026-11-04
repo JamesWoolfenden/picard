@@ -16,6 +16,8 @@ type SurfaceOptions struct {
 	// History looks up each package's past advisories (network).
 	History bool
 	OSV     *OSV
+	// Decisions are recorded in picard.yaml.
+	Decisions []Decision
 }
 
 // AnalyzeProjectSurface runs the surface analysis against a project directory.
@@ -92,12 +94,13 @@ func AnalyzeProjectSurface(opts SurfaceOptions) (*SurfaceReport, error) {
 	}
 
 	report := AnalyzeSurface(SurfaceEvidence{
-		Lock:     lock,
-		Imports:  imports,
-		Owners:   owners,
-		Commands: CommandsUsed(opts.Directory, ScriptOwners(site)),
-		Executed: executed,
-		History:  history,
+		Lock:      lock,
+		Imports:   imports,
+		Owners:    owners,
+		Commands:  CommandsUsed(opts.Directory, ScriptOwners(site)),
+		Executed:  executed,
+		History:   history,
+		Decisions: opts.Decisions,
 	}, opts.Target)
 
 	return &report, nil
@@ -164,7 +167,7 @@ func analyzeGoSurface(lockFile string, opts SurfaceOptions) (*SurfaceReport, err
 		}
 	}
 
-	report := AnalyzeSurface(SurfaceEvidence{Lock: lock, UsedBy: used, History: history}, opts.Target)
+	report := AnalyzeSurface(SurfaceEvidence{Lock: lock, UsedBy: used, History: history, Decisions: opts.Decisions}, opts.Target)
 
 	return &report, nil
 }
@@ -213,7 +216,7 @@ func analyzeNPMSurface(lockFile string, opts SurfaceOptions) (*SurfaceReport, er
 		}
 	}
 
-	report := AnalyzeSurface(SurfaceEvidence{Lock: lock, UsedBy: used, History: history}, opts.Target)
+	report := AnalyzeSurface(SurfaceEvidence{Lock: lock, UsedBy: used, History: history, Decisions: opts.Decisions}, opts.Target)
 
 	return &report, nil
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -205,13 +206,23 @@ func main() {
 				Action: func(c *cli.Context) error {
 					dir := c.String("directory")
 
+					d, err := core.ReadDeployment(filepath.Join(dir, "picard.yaml"))
+					if err != nil && !errors.Is(err, fs.ErrNotExist) {
+						return err // a picard.yaml that exists but is wrong should not be ignored
+					}
+
 					platform := c.String("platform")
 					if platform == "" {
 						platform = "linux"
 
-						if d, err := core.ReadDeployment(filepath.Join(dir, "picard.yaml")); err == nil && d.Platform != "" {
+						if d != nil && d.Platform != "" {
 							platform = d.Platform
 						}
+					}
+
+					var decisions []core.Decision
+					if d != nil {
+						decisions = d.Decisions
 					}
 
 					report, err := core.AnalyzeProjectSurface(core.SurfaceOptions{
@@ -220,6 +231,7 @@ func main() {
 						Coverage:  c.String("coverage"),
 						Target:    core.Target{OS: platform, Arch: c.String("arch"), Python: c.String("python")},
 						History:   !c.Bool("no-history"),
+						Decisions: decisions,
 					})
 					if err != nil {
 						return err
