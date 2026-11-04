@@ -76,6 +76,11 @@ One compact summary before any detail:
   proposed action.
 - **Unalerted advisories** from step 1, if any.
 
+Write it for a reader who hasn't seen the tool calls. Open with the result, name the picard
+commands that produced it, and say what an empty or `null` field means in plain terms (e.g.
+"`picard scan` found no advisories" - not a bare field name like `.findings`). If a jq
+filter errors on a clean result, say that's why, don't leave the error unexplained.
+
 ## 3. Investigate - the judgement picard leaves open
 
 Do these before proposing anything. Say what you checked and what you found.

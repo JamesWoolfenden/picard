@@ -56,6 +56,10 @@ One compact summary before any detail: totals, then each flagged dependency on a
 its packages, names used and recent severe advisories. Separate **open** flags from ones
 **decided** in `picard.yaml` (and say if any decision is stale).
 
+Write it for a reader who hasn't seen the tool calls: open with the result, name the picard
+commands that produced it, and explain empty or `null` fields in plain terms rather than by
+field name.
+
 ## 3. Investigate - the judgement picard leaves open
 
 For each open flag, and any stale decision, plus the heaviest few without a flag:
