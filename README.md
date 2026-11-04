@@ -199,6 +199,10 @@ Code skill runs `picard dependabot --prs`, investigates those (release notes aga
 names the code uses, tests on the PR branch, the reasoning behind judged verdicts), proposes
 a plan, and carries out each merge, close, dismissal or setting change on your confirmation.
 
+For surface, the [`picard-surface`](skills/README.md) skill (`/picard-surface`) takes the
+dependencies `picard surface` flags, judges whether each can really go and what to use
+instead, and records every decision - including "leave it" - in `picard.yaml`.
+
 ## Surface: what each dependency costs
 
 Triage makes alerts cheaper; `picard surface` is for having fewer of them. For each direct

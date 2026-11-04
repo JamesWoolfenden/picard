@@ -18,7 +18,7 @@ separately, and flags dependencies little used for what they cost. Still to do:
 - release cadence, major versions per year and project health from
   [deps.dev](https://deps.dev) and OpenSSF Scorecard (maintainers, release frequency,
   scorecard checks) - free APIs;
-- a picard-triage step that takes the flagged dependencies and proposes replacements.
+- a picard-surface skill step that takes the flagged dependencies and proposes replacements (done).
 
 The output would separate "noisy but rarely relevant" from "rarely flagged, so pay attention
 when it is", and could feed a default stance per package.

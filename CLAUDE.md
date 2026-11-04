@@ -41,6 +41,8 @@ Module path: `github.com/jameswoolfenden/picard`
 
 `skills/picard-triage` is the judgement layer on top (a Claude Code skill): picard stays
 deterministic; anything needing judgement - merge safety, preconditions - belongs there.
+`skills/picard-surface` is the same for `picard surface`: what can go, what to use instead, and
+recording each decision in `picard.yaml`. Alerts and PRs are triage's; attack surface is surface's.
 
 ## Working in this repo
 
