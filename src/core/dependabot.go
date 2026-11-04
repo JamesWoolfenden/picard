@@ -174,8 +174,19 @@ func decide(a Alert, report *Report) AlertDecision {
 	return d
 }
 
+// findAdvisory is picard's advisory for an alert. A package locked at several versions has a
+// finding per version, and Dependabot raises an alert per copy, so the copy is picked by the
+// alert's vulnerable range; when several copies are in range (Dependabot reports one alert
+// for them) the most serious verdict is taken, so nothing shipped is dismissed.
 func findAdvisory(a Alert, report *Report) (Advisory, bool) {
 	ghsa := a.SecurityAdvisory.GHSAID
+	rng := a.SecurityVulnerability.VulnerableVersionRange
+
+	var (
+		best, any Advisory
+		found     bool
+		anyFound  bool
+	)
 
 	for _, f := range report.Findings {
 		if !sameName(report.Ecosystem, f.Package, a.Dependency.Package.Name) {
@@ -183,13 +194,68 @@ func findAdvisory(a Alert, report *Report) (Advisory, bool) {
 		}
 
 		for _, adv := range f.Advisories {
-			if adv.ID == ghsa || contains(adv.Aliases, ghsa) {
-				return adv, true
+			if adv.ID != ghsa && !contains(adv.Aliases, ghsa) {
+				continue
+			}
+
+			if !anyFound || verdictRank(adv.Verdict) > verdictRank(any.Verdict) {
+				any, anyFound = adv, true
+			}
+
+			if rng != "" && !VersionInRange(f.Version, rng) {
+				continue
+			}
+
+			if !found || verdictRank(adv.Verdict) > verdictRank(best.Verdict) {
+				best, found = adv, true
 			}
 		}
 	}
 
-	return Advisory{}, false
+	if found {
+		return best, true
+	}
+
+	return any, anyFound
+}
+
+// VersionInRange reports whether version satisfies a GitHub advisory range such as
+// ">= 2.0.0, < 2.1.7" (comma-separated comparisons, all of which must hold). A range it
+// can't read counts as satisfied.
+func VersionInRange(version, rng string) bool {
+	for _, part := range strings.Split(rng, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		bound := strings.TrimLeft(part, "<>=! ")
+		op := strings.TrimSpace(strings.TrimSuffix(part, bound))
+		cmp := CompareVersions(version, bound)
+
+		var ok bool
+
+		switch op {
+		case "<":
+			ok = cmp < 0
+		case "<=":
+			ok = cmp <= 0
+		case ">":
+			ok = cmp > 0
+		case ">=":
+			ok = cmp >= 0
+		case "=", "==", "":
+			ok = cmp == 0
+		default:
+			continue
+		}
+
+		if !ok {
+			return false
+		}
+	}
+
+	return true
 }
 
 func contains(items []string, want string) bool {

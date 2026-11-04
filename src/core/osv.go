@@ -146,7 +146,8 @@ func (o *OSV) Query(ecosystem string, packages []*Package) (map[string][]Advisor
 	}
 
 	result := map[string][]Advisory{}
-	seen := map[string]bool{} // "<package>/<advisory>": one alert per package, however many versions hit it
+	seen := map[string]bool{} // "<package>@<version>/<advisory>": one alert per package version
+	fetched := map[string]*osvVuln{}
 
 	for i, r := range batch.Results {
 		if i >= len(queries) {
@@ -156,21 +157,21 @@ func (o *OSV) Query(ecosystem string, packages []*Package) (map[string][]Advisor
 		name := owners[i].Name
 
 		for _, v := range r.Vulns {
-			if seen[name+"/"+v.ID] {
-				for j := range result[name] {
-					if result[name][j].ID == v.ID {
-						result[name][j].Versions = mergeNames(result[name][j].Versions, []string{asked[i]})
-					}
-				}
-
+			key := name + "@" + asked[i] + "/" + v.ID
+			if seen[key] {
 				continue
 			}
 
-			seen[name+"/"+v.ID] = true
+			seen[key] = true
 
-			vuln, err := o.vuln(v.ID)
-			if err != nil {
-				return nil, err
+			vuln := fetched[v.ID]
+			if vuln == nil {
+				var err error
+				if vuln, err = o.vuln(v.ID); err != nil {
+					return nil, err
+				}
+
+				fetched[v.ID] = vuln
 			}
 
 			adv := toAdvisory(vuln, ecosystem, name, asked[i])
@@ -179,8 +180,29 @@ func (o *OSV) Query(ecosystem string, packages []*Package) (map[string][]Advisor
 		}
 	}
 
+	// Records of one vulnerability from several databases are folded together - within a
+	// version, since a package locked at several versions is fixed (and shipped) per version.
 	for name, advs := range result {
-		result[name] = mergeAliases(advs)
+		var (
+			order []string
+			by    = map[string][]Advisory{}
+		)
+
+		for _, a := range advs {
+			v := strings.Join(a.Versions, ",")
+			if _, ok := by[v]; !ok {
+				order = append(order, v)
+			}
+
+			by[v] = append(by[v], a)
+		}
+
+		var merged []Advisory
+		for _, v := range order {
+			merged = append(merged, mergeAliases(by[v])...)
+		}
+
+		result[name] = merged
 	}
 
 	return result, nil

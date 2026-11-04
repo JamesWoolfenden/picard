@@ -424,3 +424,50 @@ func TestTriageJudgesNestedNPMCopiesIndependently(t *testing.T) {
 		t.Errorf("advisory on the runtime copy: %+v", runtimeCopy)
 	}
 }
+
+func TestVersionInRange(t *testing.T) {
+	for _, c := range []struct {
+		v, rng string
+		want   bool
+	}{
+		{"5.0.9", ">= 4.0.0, < 5.0.10", true},
+		{"2.1.4", ">= 4.0.0, < 5.0.10", false},
+		{"2.1.4", ">= 2.0.0, < 2.1.7", true},
+		{"5.1.9", "< 11.0.1", true},
+		{"11.0.1", "< 11.0.1", false},
+		{"1.0.0", "<= 1.0.0", true},
+		{"1.0.1", "= 1.0.0", false},
+	} {
+		if got := VersionInRange(c.v, c.rng); got != c.want {
+			t.Errorf("VersionInRange(%s, %q) = %v", c.v, c.rng, got)
+		}
+	}
+}
+
+// Dependabot raises an alert per installed copy; each gets the verdict of the copy its
+// vulnerable range covers, and an alert covering both gets the more serious one.
+func TestFindAdvisoryPicksTheCopyByRange(t *testing.T) {
+	report := &Report{Ecosystem: EcosystemNPM, Findings: []Finding{
+		{Package: "brace-expansion", Version: "5.0.9", Advisories: []Advisory{{ID: "GHSA-a", Verdict: VerdictNotShipped}}},
+		{Package: "brace-expansion", Version: "2.1.4", Advisories: []Advisory{{ID: "GHSA-a", Verdict: VerdictShipped}}},
+	}}
+
+	alert := func(rng string) Alert {
+		var a Alert
+		a.Dependency.Package.Name = "brace-expansion"
+		a.SecurityAdvisory.GHSAID = "GHSA-a"
+		a.SecurityVulnerability.VulnerableVersionRange = rng
+
+		return a
+	}
+
+	for rng, want := range map[string]Verdict{
+		">= 4.0.0, < 5.0.10": VerdictNotShipped,
+		">= 2.0.0, < 2.1.7":  VerdictShipped,
+		"< 11.0.1":           VerdictShipped,
+	} {
+		if d := decide(alert(rng), report); d.Verdict != want {
+			t.Errorf("range %q: verdict %s, want %s", rng, d.Verdict, want)
+		}
+	}
+}

@@ -79,6 +79,51 @@ type Evidence struct {
 	GoReach map[string]*GoReach
 }
 
+// installUnit is the advisories of one package, or of one installed version of it.
+type installUnit struct {
+	name, version string
+	advs          []Advisory
+}
+
+// installUnits groups advisories into what is judged together: a package, or - where the
+// lock installs a package at several versions (npm) - each installed version on its own,
+// since one copy can be a runtime dependency and another dev-only.
+func installUnits(advisories map[string][]Advisory, lock *Lock) []installUnit {
+	var units []installUnit
+
+	for name, advs := range advisories {
+		if len(advs) == 0 {
+			continue
+		}
+
+		if lock.Nodes == nil || !hasVersions(advs) {
+			units = append(units, installUnit{name: name, advs: advs})
+
+			continue
+		}
+
+		var order []string
+
+		by := map[string][]Advisory{}
+
+		for _, a := range advs {
+			for _, v := range a.Versions {
+				if _, ok := by[v]; !ok {
+					order = append(order, v)
+				}
+
+				by[v] = append(by[v], a)
+			}
+		}
+
+		for _, v := range order {
+			units = append(units, installUnit{name: name, version: v, advs: by[v]})
+		}
+	}
+
+	return units
+}
+
 func hasVersions(advs []Advisory) bool {
 	for _, a := range advs {
 		if len(a.Versions) > 0 {
@@ -131,15 +176,17 @@ func Triage(advisories map[string][]Advisory, ev Evidence) []Finding {
 
 	var findings []Finding
 
-	for name, advs := range advisories {
-		if len(advs) == 0 {
-			continue
-		}
+	for _, unit := range installUnits(advisories, ev.Lock) {
+		name, advs := unit.name, unit.advs
 
 		f := Finding{Package: name, Advisories: advs, Severity: "unknown", Executed: UseUnknown}
 
 		if pkg := ev.Lock.Packages[name]; pkg != nil {
 			f.Version = pkg.Version
+		}
+
+		if unit.version != "" {
+			f.Version = unit.version
 		}
 
 		for _, a := range advs {

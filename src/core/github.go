@@ -63,7 +63,8 @@ type Alert struct {
 		Severity string `json:"severity"`
 	} `json:"security_advisory"`
 	SecurityVulnerability struct {
-		FirstPatchedVersion *struct {
+		VulnerableVersionRange string `json:"vulnerable_version_range"`
+		FirstPatchedVersion    *struct {
 			Identifier string `json:"identifier"`
 		} `json:"first_patched_version"`
 	} `json:"security_vulnerability"`
