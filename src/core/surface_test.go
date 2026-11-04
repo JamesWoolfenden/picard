@@ -308,3 +308,102 @@ func TestCommandsUsedReadsConsoleScripts(t *testing.T) {
 		t.Errorf("used = %v, want uvicorn only", used)
 	}
 }
+
+func TestGoSurfaceFollowsModuleEdges(t *testing.T) {
+	lock := &Lock{
+		Project:   "example.com/app",
+		Ecosystem: EcosystemGo,
+		Direct:    []string{"example.com/heavy", "example.com/light"},
+		Compiled: map[string]bool{
+			"example.com/heavy": true, "example.com/heavy/sub": true, "example.com/dep": true,
+			"example.com/light": true,
+		},
+		Packages: map[string]*Package{
+			"example.com/heavy": {Name: "example.com/heavy", Version: "v1.0.0", Deps: []string{"example.com/dep"}},
+			"example.com/dep":   {Name: "example.com/dep", Version: "v1.0.0"},
+			"example.com/light": {Name: "example.com/light", Version: "v1.0.0"},
+		},
+	}
+
+	report := AnalyzeSurface(SurfaceEvidence{
+		Lock:   lock,
+		UsedBy: map[string][]string{"example.com/heavy": {"example.com/heavy/sub"}},
+	}, Target{})
+
+	if report.Ecosystem != EcosystemGo || report.Total != 3 {
+		t.Fatalf("ecosystem/total = %q/%d, want Go/3", report.Ecosystem, report.Total)
+	}
+
+	var heavy, light *Surface
+
+	for i := range report.Entries {
+		switch report.Entries[i].Dependency {
+		case "example.com/heavy":
+			heavy = &report.Entries[i]
+		case "example.com/light":
+			light = &report.Entries[i]
+		}
+	}
+
+	if heavy == nil || len(heavy.Packages) != 2 || heavy.CompiledPackages() != 3 {
+		t.Errorf("heavy = %+v, want 2 modules and 3 compiled packages", heavy)
+	}
+
+	if !reflect.DeepEqual(heavy.UsedNames, []string{"example.com/heavy/sub"}) {
+		t.Errorf("heavy used = %v", heavy.UsedNames)
+	}
+
+	if light == nil || light.Review == nil || light.Review.Kind != "unused" {
+		t.Errorf("light = %+v, want flagged unused (nothing imports it)", light)
+	}
+
+	if heavy.Packages[0].Native != "" {
+		t.Errorf("native = %q, want blank for Go", heavy.Packages[0].Native)
+	}
+}
+
+func TestApplyGoEdgesSetsDeps(t *testing.T) {
+	lock := &Lock{Packages: map[string]*Package{"a": {Name: "a"}, "b": {Name: "b"}}}
+	ApplyGoEdges(lock, map[string][]string{"a": {"b"}, "missing": {"a"}})
+
+	if !reflect.DeepEqual(lock.Packages["a"].Deps, []string{"b"}) {
+		t.Errorf("a deps = %v", lock.Packages["a"].Deps)
+	}
+}
+
+func TestNPMSurfaceHasNoWheelColumns(t *testing.T) {
+	lock := &Lock{
+		Project:   "app",
+		Ecosystem: EcosystemNPM,
+		Direct:    []string{"big", "unused"},
+		Packages: map[string]*Package{
+			"big":    {Name: "big", Version: "1.0.0", Deps: []string{"inner"}},
+			"inner":  {Name: "inner", Version: "1.0.0"},
+			"unused": {Name: "unused", Version: "1.0.0"},
+		},
+	}
+
+	report := AnalyzeSurface(SurfaceEvidence{Lock: lock, UsedBy: map[string][]string{"big": {"big/sub"}}}, Target{})
+
+	var out strings.Builder
+	if err := report.WriteTable(&out, false); err != nil {
+		t.Fatal(err)
+	}
+
+	text := out.String()
+	if strings.Contains(text, "NATIVE") || strings.Contains(text, "SIZE") || strings.Contains(text, "Python") {
+		t.Errorf("npm table has Python-only columns:\n%s", text)
+	}
+
+	for _, e := range report.Entries {
+		if e.Dependency == "unused" && (e.Review == nil || e.Review.Kind != "unused") {
+			t.Errorf("unused = %+v, want flagged unused", e.Review)
+		}
+
+		for _, p := range e.Packages {
+			if p.Native != "" {
+				t.Errorf("%s native = %q, want blank", p.Name, p.Native)
+			}
+		}
+	}
+}

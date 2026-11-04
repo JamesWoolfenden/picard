@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -267,6 +268,18 @@ var goImportRe = regexp.MustCompile(`^\s*(?:import\s+)?(?:[\w.]+\s+)?"([^"]+)"`)
 // ScanGoImports finds the modules the project's own non-test Go code imports: each import
 // path is attributed to the locked module that is its longest prefix.
 func ScanGoImports(root string, lock *Lock) (map[string]bool, error) {
+	paths, err := ScanGoImportPaths(root, lock)
+
+	imported := map[string]bool{}
+	for m := range paths {
+		imported[m] = true
+	}
+
+	return imported, err
+}
+
+// ScanGoImportPaths is ScanGoImports with the import paths the code uses from each module.
+func ScanGoImportPaths(root string, lock *Lock) (map[string][]string, error) {
 	modules := make([]string, 0, len(lock.Packages))
 	for name := range lock.Packages {
 		if name != GoStdlib {
@@ -277,7 +290,7 @@ func ScanGoImports(root string, lock *Lock) (map[string]bool, error) {
 	// Longest first, so golang.org/x/net/http2 beats golang.org/x/net.
 	sort.Slice(modules, func(i, j int) bool { return len(modules[i]) > len(modules[j]) })
 
-	imported := map[string]bool{}
+	imported := map[string][]string{}
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -327,7 +340,9 @@ func ScanGoImports(root string, lock *Lock) (map[string]bool, error) {
 
 			for _, mod := range modules {
 				if m[1] == mod || strings.HasPrefix(m[1], mod+"/") {
-					imported[mod] = true
+					if !slices.Contains(imported[mod], m[1]) {
+						imported[mod] = append(imported[mod], m[1])
+					}
 
 					break
 				}
@@ -338,4 +353,109 @@ func ScanGoImports(root string, lock *Lock) (map[string]bool, error) {
 	})
 
 	return imported, err
+}
+
+// goModuleEdges lists which module imports which among the packages the non-test build
+// compiles in, taking the union across goPlatforms (a build tag can add an edge on one
+// platform only). The standard library is left out. A variable so tests can stand in for it.
+var goModuleEdges = func(dir string) (map[string][]string, error) {
+	type result struct {
+		out []byte
+		err error
+	}
+
+	results := make([]result, len(goPlatforms))
+
+	var wg sync.WaitGroup
+
+	for i, p := range goPlatforms {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			cmd := exec.Command("go", "list", "-deps", "-f",
+				`{{.ImportPath}}|{{with .Module}}{{.Path}}{{end}}|{{join .Imports " "}}`, "./...")
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "GOOS="+p[0], "GOARCH="+p[1], "CGO_ENABLED="+p[2])
+
+			out, err := cmd.Output()
+			results[i] = result{out, err}
+		}()
+	}
+
+	wg.Wait()
+
+	edges := map[string]map[string]bool{}
+
+	for i, r := range results {
+		if r.err != nil {
+			return nil, fmt.Errorf("go list -deps (%s/%s): %w", goPlatforms[i][0], goPlatforms[i][1], r.err)
+		}
+
+		moduleOf := map[string]string{}
+		imports := map[string][]string{}
+
+		for _, line := range strings.Split(string(r.out), "\n") {
+			parts := strings.SplitN(strings.TrimSpace(line), "|", 3)
+			if len(parts) != 3 {
+				continue
+			}
+
+			moduleOf[parts[0]] = parts[1]
+			imports[parts[0]] = strings.Fields(parts[2])
+		}
+
+		for pkg, imported := range imports {
+			from := moduleOf[pkg]
+			if from == "" {
+				continue
+			}
+
+			for _, imp := range imported {
+				if to := moduleOf[imp]; to != "" && to != from {
+					if edges[from] == nil {
+						edges[from] = map[string]bool{}
+					}
+
+					edges[from][to] = true
+				}
+			}
+		}
+	}
+
+	out := map[string][]string{}
+
+	for from, tos := range edges {
+		for to := range tos {
+			out[from] = append(out[from], to)
+		}
+
+		sort.Strings(out[from])
+	}
+
+	return out, nil
+}
+
+// ApplyGoEdges gives each module in the lock the modules it imports, so Closure follows the
+// real build graph (go.mod itself records no edges).
+func ApplyGoEdges(lock *Lock, edges map[string][]string) {
+	for from, tos := range edges {
+		if pkg := lock.Packages[from]; pkg != nil {
+			pkg.Deps = tos
+		}
+	}
+}
+
+// CompiledPackages counts the packages of a module the build compiles in.
+func (l *Lock) CompiledPackages(module string) int {
+	n := 0
+
+	for path := range l.Compiled {
+		if path == module || strings.HasPrefix(path, module+"/") {
+			n++
+		}
+	}
+
+	return n
 }

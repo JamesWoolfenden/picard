@@ -193,7 +193,7 @@ func main() {
 				UsageText: "picard surface -d . [--coverage coverage.json] [--format table|json]",
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "directory", Aliases: []string{"d"}, Usage: "project directory", Value: "."},
-					&cli.StringFlag{Name: "lock", Usage: "lock file (default: <directory>/uv.lock)"},
+					&cli.StringFlag{Name: "lock", Usage: "lock file (default: uv.lock, else package-lock.json, else go.mod)"},
 					&cli.StringFlag{Name: "coverage", Aliases: []string{"c"}, Usage: "coverage.py JSON report, for functions actually called"},
 					&cli.StringFlag{Name: "platform", Usage: "target OS: linux, windows or macos (default: picard.yaml's, else linux)"},
 					&cli.StringFlag{Name: "arch", Usage: "target architecture: x86_64 or arm64", Value: "x86_64"},

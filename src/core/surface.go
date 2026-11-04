@@ -28,6 +28,8 @@ type SurfacePackage struct {
 	Size int64 `json:"size"`
 	// Advisories is every advisory ever published against the package, at any version;
 	// History, each of them.
+	// Compiled is how many of the module's packages the build compiles in (Go only).
+	Compiled   int            `json:"compiled_packages,omitempty"`
 	Advisories int            `json:"advisories"`
 	History    []PastAdvisory `json:"history,omitempty"`
 }
@@ -82,6 +84,17 @@ func (s Surface) Native() int {
 	return n
 }
 
+// CompiledPackages totals the Go packages the build compiles in from the group's modules.
+func (s Surface) CompiledPackages() int {
+	n := 0
+
+	for _, p := range s.Packages {
+		n += p.Compiled
+	}
+
+	return n
+}
+
 // Size totals the known wheel sizes; complete is false if any were unknown.
 func (s Surface) Size() (total int64, complete bool) {
 	complete = true
@@ -100,6 +113,7 @@ func (s Surface) Size() (total int64, complete bool) {
 // SurfaceReport ranks the project's direct dependencies by what they bring in.
 type SurfaceReport struct {
 	Project    string       `json:"project"`
+	Ecosystem  string       `json:"ecosystem"`
 	Target     Target       `json:"target"`
 	Total      int          `json:"total_packages"`
 	Entries    []Surface    `json:"dependencies"`
@@ -114,6 +128,9 @@ type SurfaceEvidence struct {
 	Commands map[string]bool   // packages whose console commands the project runs
 	Executed map[string]*ModuleUse
 	History  map[string][]PastAdvisory // package -> every past advisory; nil when not looked up
+	// UsedBy are the import paths the project's code uses from each Go module or npm
+	// package; nil for Python, which works from Imports and Owners.
+	UsedBy map[string][]string
 	// Now is when "recent" is measured from; zero means the current time.
 	Now time.Time
 }
@@ -122,7 +139,7 @@ type SurfaceEvidence struct {
 func AnalyzeSurface(ev SurfaceEvidence, target Target) SurfaceReport {
 	lock, imports, owners, executed, history := ev.Lock, ev.Imports, ev.Owners, ev.Executed, ev.History
 	everything := lock.Closure(lock.Direct)
-	report := SurfaceReport{Project: lock.Project, Target: target, Total: len(everything)}
+	report := SurfaceReport{Project: lock.Project, Ecosystem: lock.Ecosystem, Target: target, Total: len(everything)}
 	report.Undeclared = undeclaredImports(lock, imports, owners)
 
 	now := ev.Now
@@ -158,6 +175,14 @@ func AnalyzeSurface(ev SurfaceEvidence, target Target) SurfaceReport {
 			}
 
 			s.Packages = append(s.Packages, describePackage(lock.Packages[name], name, target, history))
+
+			if lock.Ecosystem != EcosystemPyPI {
+				s.Packages[len(s.Packages)-1].Native = "" // wheels are a Python notion
+			}
+
+			if lock.Ecosystem == EcosystemGo {
+				s.Packages[len(s.Packages)-1].Compiled = lock.CompiledPackages(name)
+			}
 		}
 
 		sort.Slice(s.Packages, func(i, j int) bool { return s.Packages[i].Name < s.Packages[j].Name })
@@ -180,6 +205,10 @@ func AnalyzeSurface(ev SurfaceEvidence, target Target) SurfaceReport {
 		}
 
 		s.UsedNames = namesFrom(imports, owners, inGroup)
+
+		if ev.UsedBy != nil {
+			s.UsedNames = usedByFrom(ev.UsedBy, inGroup)
+		}
 
 		for g := range inGroup {
 			s.Command = s.Command || ev.Commands[g]
@@ -397,8 +426,19 @@ func pythonFit(pyTag, abiTag, python string) int {
 func (r SurfaceReport) WriteTable(w io.Writer, detail bool) error {
 	width := textWidth()
 
-	fmt.Fprintf(w, "%s ships %s (%s %s, Python %s). What each direct dependency alone brings in:\n\n",
-		r.Project, plural(r.Total, "package"), r.Target.OS, r.Target.Arch, r.Target.Python)
+	isGo, isPython := r.Ecosystem == EcosystemGo, r.Ecosystem == EcosystemPyPI
+
+	switch {
+	case isGo:
+		fmt.Fprintf(w, "%s ships %s. What each directly imported module alone brings in:\n\n",
+			r.Project, plural(r.Total, "module"))
+	case !isPython:
+		fmt.Fprintf(w, "%s ships %s. What each direct dependency alone brings in:\n\n",
+			r.Project, plural(r.Total, "package"))
+	default:
+		fmt.Fprintf(w, "%s ships %s (%s %s, Python %s). What each direct dependency alone brings in:\n\n",
+			r.Project, plural(r.Total, "package"), r.Target.OS, r.Target.Arch, r.Target.Python)
+	}
 
 	coverage := false
 	for _, s := range r.Entries {
@@ -407,7 +447,17 @@ func (r SurfaceReport) WriteTable(w io.Writer, detail bool) error {
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 
-	header := "DEPENDENCY\tPACKAGES\tNATIVE\tSIZE\tADVISORIES\t" + fmt.Sprintf("LAST %dY", churnYears) + "\tUSED"
+	last := fmt.Sprintf("LAST %dY", churnYears)
+
+	header := "DEPENDENCY\tPACKAGES\tNATIVE\tSIZE\tADVISORIES\t" + last + "\tUSED"
+
+	switch {
+	case isGo:
+		header = "DEPENDENCY\tMODULES\tCOMPILED PKGS\tADVISORIES\t" + last + "\tUSED"
+	case !isPython:
+		header = "DEPENDENCY\tPACKAGES\tADVISORIES\t" + last + "\tUSED"
+	}
+
 	if coverage {
 		header += "\tFUNCTIONS CALLED"
 	}
@@ -422,6 +472,15 @@ func (r SurfaceReport) WriteTable(w io.Writer, detail bool) error {
 
 		row := fmt.Sprintf("%s\t%d\t%d\t%s\t%d\t%s\t%s", name, len(s.Packages), s.Native(), formatSize(s),
 			s.Churn.Total, recentSummary(s.Churn), usedSummary(s))
+		switch {
+		case isGo:
+			row = fmt.Sprintf("%s\t%d\t%d\t%d\t%s\t%s", name, len(s.Packages), s.CompiledPackages(),
+				s.Churn.Total, recentSummary(s.Churn), usedSummary(s))
+		case !isPython:
+			row = fmt.Sprintf("%s\t%d\t%d\t%s\t%s", name, len(s.Packages),
+				s.Churn.Total, recentSummary(s.Churn), usedSummary(s))
+		}
+
 		if coverage {
 			row += "\t" + fmt.Sprint(len(s.Called))
 		}
@@ -469,7 +528,7 @@ func (r SurfaceReport) WriteTable(w io.Writer, detail bool) error {
 		}
 	}
 
-	if listed {
+	if listed && isPython {
 		fmt.Fprintf(w, "\n* native code   (n) past advisories   ? no wheel for %s %s - probably not installed there\n",
 			r.Target.OS, r.Target.Arch)
 	}
@@ -604,4 +663,17 @@ func packageList(packages []SurfacePackage) string {
 	}
 
 	return strings.Join(parts, ", ")
+}
+
+// usedByFrom lists the import paths the project's code uses from the given modules or packages.
+func usedByFrom(used map[string][]string, modules map[string]bool) []string {
+	names := []string{}
+
+	for m := range modules {
+		names = append(names, used[m]...)
+	}
+
+	sort.Strings(names)
+
+	return names
 }

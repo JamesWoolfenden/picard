@@ -265,8 +265,8 @@ func (a *Advisory) absorb(b Advisory) {
 // History is every advisory ever published against each package, at any version - a
 // package's track record, as opposed to its current exposure. Each is fetched for its date
 // and severity, and records of one vulnerability from several databases count once.
-func (o *OSV) History(names []string) (map[string][]PastAdvisory, error) {
-	ids, err := o.historyIDs(names)
+func (o *OSV) History(ecosystem string, names []string) (map[string][]PastAdvisory, error) {
+	ids, err := o.historyIDs(ecosystem, names)
 	if err != nil {
 		return nil, err
 	}
@@ -347,7 +347,7 @@ func (o *OSV) History(names []string) (map[string][]PastAdvisory, error) {
 }
 
 // historyIDs lists the ids OSV has against each package, at any version.
-func (o *OSV) historyIDs(names []string) (map[string][]string, error) {
+func (o *OSV) historyIDs(ecosystem string, names []string) (map[string][]string, error) {
 	type pkgQuery struct {
 		Package struct {
 			Name      string `json:"name"`
@@ -362,7 +362,7 @@ func (o *OSV) historyIDs(names []string) (map[string][]string, error) {
 
 	for i, n := range names {
 		pending[i].Package.Name = n
-		pending[i].Package.Ecosystem = "PyPI"
+		pending[i].Package.Ecosystem = ecosystem
 		owner[i] = n
 	}
 

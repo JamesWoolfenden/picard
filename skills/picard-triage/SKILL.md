@@ -166,6 +166,37 @@ not hold), offer to draft one from the repo - Dockerfile, deploy scripts, Terraf
 with where it came from, for the user to review. Unknown stays out: picard treats a missing
 fact as possibly true.
 
+### i. Attack surface
+
+Not about advisories: about what the project ships that it could do without. Run, per lock
+directory:
+
+```shell
+picard surface -d <lock directory> --format json
+```
+
+(Python, npm and Go; the default lock is `uv.lock`, then `package-lock.json`, then `go.mod`.)
+Each dependency lists what it alone brings in (`packages`), how much of it the code uses
+(`used_names`), its advisory record (`churn`: all-time, last 3 years, separate events, high or
+critical) and, when picard's rules fire, a `review`: `unused` (nothing imports it) or `replace`
+(little used for what it costs). Python adds wheel size and native code; Go adds
+`compiled_packages`.
+
+For each flagged dependency, and the heaviest few without a flag:
+- Is it really unused? A plugin, driver or server extra is loaded by name, so grep for it in
+  config, Dockerfiles and entry points before saying remove.
+- If little used: what does the code actually call (`used_names`, then the source)? Is that a
+  few lines of the standard library, a narrower package (a sub-module published on its own, a
+  single-purpose library), or the same thing reached another way (shelling out to `git`
+  instead of a Git library)? Say what the replacement costs in API changes and tests, and
+  which of its own advisories it avoids.
+- Prefer removals that shrink what *ships* (packages, compiled packages) over ones that only
+  tidy the manifest.
+
+Rank by surface removed (packages, then recent high or critical advisory events). Each is a
+code change the user must decide on - never make one unprompted. After a change, re-run
+`picard surface` and report the before and after package counts.
+
 ## 4. Propose the plan
 
 One list, most valuable first:
@@ -173,7 +204,8 @@ One list, most valuable first:
 2. upgrades for shipped advisories without a PR,
 3. dismissals (facts, then judged - each with its reason),
 4. closes of noise PRs,
-5. setup changes.
+5. surface reductions (3i) - each a code change, so offered one at a time,
+6. setup changes.
 
 Each item: the action, the exact command, and the one-line reason. With `--dry-run`, stop
 here.
