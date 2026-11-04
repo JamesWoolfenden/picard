@@ -174,8 +174,8 @@ func (o *OSV) Query(ecosystem string, packages []*Package) (map[string][]Advisor
 			}
 
 			adv := toAdvisory(vuln, ecosystem, name, asked[i])
-				adv.Versions = []string{asked[i]}
-				result[name] = append(result[name], adv)
+			adv.Versions = []string{asked[i]}
+			result[name] = append(result[name], adv)
 		}
 	}
 
