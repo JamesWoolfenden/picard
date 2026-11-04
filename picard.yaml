@@ -1,0 +1,22 @@
+# Decisions about dependencies `picard surface` flags. picard still reports the facts; a
+# recorded keep/defer settles the flag only while the baseline holds, so growth reopens it.
+decisions:
+  - dependency: github.com/anthropics/anthropic-sdk-go
+    decision: keep
+    date: 2026-11-04
+    reason: >
+      Fundamental to picard: --assess has a model read each shipped advisory and judge
+      whether this deployment meets its preconditions, which is what turns "shipped" into a
+      justified not-affected (the judged dismissals and OpenVEX output). It is imported only
+      by src/core/claude.go. The picard-triage skill does not use it - the skill judges inside
+      Claude Code - but --assess is the unattended path (CI, no session), so both stay.
+    evidence: >
+      picard surface -d . on 2026-11-04: 17 modules, 60 compiled packages, 3 advisories in
+      3 years (2 high or critical), 2 import paths used. picard scan: no known advisories
+      against the locked versions.
+    revisit: >
+      an advisory against the SDK with verdict reachable or shipped, the tree growing, or
+      --assess moving behind a build tag or separate binary.
+    baseline:
+      packages: 17
+      recent_severe: 2
