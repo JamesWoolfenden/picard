@@ -26,6 +26,9 @@ type Advisory struct {
 	Severity string   `json:"severity"`
 	// Fixed is the lowest version that fixes this advisory above the locked one, or "".
 	Fixed string `json:"fixed,omitempty"`
+	// Versions are the locked versions of the package the advisory was found against (npm,
+	// where a package can be installed at several); empty otherwise.
+	Versions []string `json:"-"`
 	// FixRefs are the advisory's FIX references - usually the commit or pull request.
 	FixRefs []string `json:"fix_refs,omitempty"`
 	// AffectedPackages are the import paths the advisory names as vulnerable (Go advisories
@@ -154,6 +157,12 @@ func (o *OSV) Query(ecosystem string, packages []*Package) (map[string][]Advisor
 
 		for _, v := range r.Vulns {
 			if seen[name+"/"+v.ID] {
+				for j := range result[name] {
+					if result[name][j].ID == v.ID {
+						result[name][j].Versions = mergeNames(result[name][j].Versions, []string{asked[i]})
+					}
+				}
+
 				continue
 			}
 
@@ -164,7 +173,9 @@ func (o *OSV) Query(ecosystem string, packages []*Package) (map[string][]Advisor
 				return nil, err
 			}
 
-			result[name] = append(result[name], toAdvisory(vuln, ecosystem, name, asked[i]))
+			adv := toAdvisory(vuln, ecosystem, name, asked[i])
+				adv.Versions = []string{asked[i]}
+				result[name] = append(result[name], adv)
 		}
 	}
 
@@ -258,6 +269,7 @@ func (a *Advisory) absorb(b Advisory) {
 		a.Fixed = b.Fixed
 	}
 
+	a.Versions = mergeNames(a.Versions, b.Versions)
 	a.FixRefs = mergeNames(a.FixRefs, b.FixRefs)
 	a.AffectedPackages = mergeNames(a.AffectedPackages, b.AffectedPackages)
 }

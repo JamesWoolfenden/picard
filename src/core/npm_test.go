@@ -388,3 +388,39 @@ func uuidOSV() *httptest.Server {
 		}
 	}))
 }
+
+// A package installed twice - a dev-only copy hoisted to the top, a runtime copy nested under
+// the dependency that needs a different range - ships only if the copy with the advisory does.
+func TestTriageJudgesNestedNPMCopiesIndependently(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "package-lock.json")
+	lockJSON := `{"name":"app","lockfileVersion":3,"packages":{
+	 "":{"name":"app","dependencies":{"client":"^9"},"devDependencies":{"vsce":"^3"}},
+	 "node_modules/client":{"version":"9.0.1","dependencies":{"minimatch":"^5"}},
+	 "node_modules/client/node_modules/minimatch":{"version":"5.1.9"},
+	 "node_modules/vsce":{"version":"3.0.0","dependencies":{"minimatch":"^10"}},
+	 "node_modules/minimatch":{"version":"10.2.6","dev":true}}}`
+
+	if err := os.WriteFile(path, []byte(lockJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	lock, err := ReadNPMLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	adv := func(version string) map[string][]Advisory {
+		return map[string][]Advisory{"minimatch": {{ID: "GHSA-x", Severity: "high", Versions: []string{version}}}}
+	}
+
+	devCopy := Triage(adv("10.2.6"), Evidence{Lock: lock})
+	if len(devCopy) != 1 || devCopy[0].Shipped || devCopy[0].Verdict != VerdictNotShipped {
+		t.Errorf("advisory on the dev-only copy: %+v", devCopy)
+	}
+
+	runtimeCopy := Triage(adv("5.1.9"), Evidence{Lock: lock})
+	if len(runtimeCopy) != 1 || !runtimeCopy[0].Shipped ||
+		!reflect.DeepEqual(runtimeCopy[0].Via, []string{"client", "minimatch"}) {
+		t.Errorf("advisory on the runtime copy: %+v", runtimeCopy)
+	}
+}

@@ -55,6 +55,12 @@ type Lock struct {
 	// Bundler names the bundler the project builds with (npm), or "". A bundler copies
 	// whatever the code reaches into its output, so a dev dependency may ship after all.
 	Bundler string
+	// Nodes (npm) are the edges between exact installs: "name@version" -> the "name@version"s
+	// it resolves its dependencies to. RootNodes are the installs the project's own
+	// dependencies resolve to. A package locked at several versions is one entry in Packages
+	// but one node per version here, so reachability can be judged per version.
+	Nodes     map[string][]string
+	RootNodes []string
 	// MinPython is the lowest Python the lock supports ("3.12" from requires-python
 	// ">=3.12"), or "".
 	MinPython string
@@ -234,6 +240,56 @@ func mergeNames(into, more []string) []string {
 	}
 
 	return into
+}
+
+// NodeClosure is every install ("name@version") reachable from the given direct dependency
+// names, each mapped to a shortest chain of package names that pulls it in. It is nil when
+// the lock has no per-install edges (anything but npm), so callers fall back to Closure.
+func (l *Lock) NodeClosure(roots []string) map[string][]string {
+	if l.Nodes == nil {
+		return nil
+	}
+
+	want := map[string]bool{}
+	for _, r := range roots {
+		want[r] = true
+	}
+
+	paths := map[string][]string{}
+
+	var queue []string
+
+	for _, id := range l.RootNodes {
+		if _, ok := paths[id]; !ok && want[nodeName(id)] {
+			paths[id] = []string{nodeName(id)}
+			queue = append(queue, id)
+		}
+	}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		for _, dep := range l.Nodes[current] {
+			if _, seen := paths[dep]; seen {
+				continue
+			}
+
+			paths[dep] = append(append([]string(nil), paths[current]...), nodeName(dep))
+			queue = append(queue, dep)
+		}
+	}
+
+	return paths
+}
+
+// nodeName is the package name of a "name@version" install id (scoped names start with @).
+func nodeName(id string) string {
+	if i := strings.LastIndex(id, "@"); i > 0 {
+		return id[:i]
+	}
+
+	return id
 }
 
 // Closure is every package reachable from the given roots, each mapped to one shortest

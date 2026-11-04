@@ -91,6 +91,9 @@ func ReadNPMLock(path string) (*Lock, error) {
 		return keys[i] < keys[j]
 	})
 
+	lock.Nodes = map[string][]string{}
+	lock.RootNodes = resolveNodes(raw.Packages, "", mergeNames(lock.Direct, lock.DevDirect))
+
 	for _, key := range keys {
 		entry := raw.Packages[key]
 
@@ -103,6 +106,12 @@ func ReadNPMLock(path string) (*Lock, error) {
 		if name == "" {
 			name = key[strings.LastIndex(key, nodeModules)+len(nodeModules):]
 		}
+
+		// The edges of this exact install, each resolved the way node would: the nearest
+		// node_modules up the tree that holds the dependency.
+		nodeID := name + "@" + entry.Version
+		lock.Nodes[nodeID] = mergeNames(lock.Nodes[nodeID],
+			resolveNodes(raw.Packages, key, sortedKeys(entry.Dependencies, entry.OptionalDependencies, entry.PeerDependencies)))
 
 		deps := sortedKeys(entry.Dependencies, entry.OptionalDependencies, entry.PeerDependencies)
 
@@ -123,6 +132,42 @@ func ReadNPMLock(path string) (*Lock, error) {
 	}
 
 	return lock, nil
+}
+
+// resolveNodes resolves dependency names, as required from the package installed at from
+// ("" for the project), to the "name@version" of the install node would pick: the nearest
+// node_modules, walking up from the requiring package. Names that don't resolve (an optional
+// dependency not installed on this platform) are skipped.
+func resolveNodes(packages map[string]npmEntry, from string, names []string) []string {
+	var out []string
+
+	for _, dep := range names {
+		for dir := from; ; {
+			prefix := ""
+			if dir != "" {
+				prefix = dir + "/"
+			}
+
+			if entry, ok := packages[prefix+nodeModules+dep]; ok && !entry.Link {
+				out = append(out, dep+"@"+entry.Version)
+
+				break
+			}
+
+			if dir == "" {
+				break
+			}
+
+			// Up one level: the directory that holds the node_modules this one sits in.
+			if i := strings.LastIndex(dir, nodeModules); i > 0 {
+				dir = dir[:i-1]
+			} else {
+				dir = ""
+			}
+		}
+	}
+
+	return out
 }
 
 // bundlers are packages that, as a project's own direct dependency, mean its build bundles

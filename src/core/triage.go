@@ -79,6 +79,36 @@ type Evidence struct {
 	GoReach map[string]*GoReach
 }
 
+func hasVersions(advs []Advisory) bool {
+	for _, a := range advs {
+		if len(a.Versions) > 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
+// affectedPath is the chain that pulls in one of the installs of name the advisories were
+// found against, taken from a per-install closure.
+func affectedPath(name string, advs []Advisory, nodes map[string][]string) ([]string, bool) {
+	var versions []string
+
+	for _, a := range advs {
+		versions = mergeNames(versions, a.Versions)
+	}
+
+	var best []string
+
+	for _, v := range versions {
+		if p, ok := nodes[name+"@"+v]; ok && (best == nil || len(p) < len(best)) {
+			best = p
+		}
+	}
+
+	return best, best != nil
+}
+
 var severityRank = map[string]int{"critical": 4, "high": 3, "moderate": 2, "medium": 2, "low": 1}
 
 // Triage turns per-package advisories into findings, most serious first. Any assessments
@@ -122,11 +152,21 @@ func Triage(advisories map[string][]Advisory, ev Evidence) []Finding {
 			}
 		}
 
-		if path, ok := prod[name]; ok {
+		path, ok := prod[name]
+		viaAll := all[name]
+
+		// A package installed at several versions ships only if an affected version does:
+		// the dev-only copy 5.0.9 doesn't ship because another copy, 2.1.4, is a runtime one.
+		if nodes := ev.Lock.NodeClosure(ev.Lock.Direct); nodes != nil && hasVersions(advs) {
+			path, ok = affectedPath(name, advs, nodes)
+			viaAll, _ = affectedPath(name, advs, ev.Lock.NodeClosure(append(append([]string(nil), ev.Lock.Direct...), ev.Lock.DevDirect...)))
+		}
+
+		if ok {
 			f.Shipped = true
 			f.Via = path
 		} else {
-			f.Via = all[name]
+			f.Via = viaAll
 
 			f.Bundler = ev.Lock.Bundler
 
