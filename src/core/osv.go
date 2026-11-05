@@ -43,6 +43,11 @@ type Advisory struct {
 	Assessment *Assessment `json:"assessment,omitempty"`
 	Verdict    Verdict     `json:"verdict,omitempty"`
 	Reason     string      `json:"reason,omitempty"`
+	// KEV: in CISA's Known Exploited Vulnerabilities catalog (added KEVAdded); EPSS: FIRST's
+	// 30-day exploitation probability, 0 when unknown. See exploit.go.
+	KEV      bool    `json:"kev,omitempty"`
+	KEVAdded string  `json:"kev_added,omitempty"`
+	EPSS     float64 `json:"epss,omitempty"`
 }
 
 // OSV is a minimal client for the batch query and per-vulnerability endpoints.

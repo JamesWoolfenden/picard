@@ -130,6 +130,15 @@ Each dismissal carries picard's reason as its comment (Dependabot allows 280 cha
 so whoever reads the alert later sees why. Alerts on manifests picard can't read yet, or
 whose advisory picard doesn't find at the locked version, are skipped, not dismissed.
 
+### Known exploited, likely exploited
+
+`scan` and `dependabot` look each advisory's CVE up in CISA's Known Exploited Vulnerabilities
+catalog and FIRST's EPSS scores. Findings in KEV (`!` in the KEV column) sort first whatever
+their severity or verdict, then by verdict and EPSS. An advisory in KEV, or with an EPSS of
+0.1 or more, is never dismissed by `--apply` or `--apply-judged`: it stays open with the
+reason. If either source can't be reached the scan fails rather than dismiss without the
+check; `--no-exploit-intel` skips both for offline runs.
+
 It starts by checking the repository's Dependabot setup, since that decides how noisy the
 alerts and PRs are: alerts on, **security updates on** (so an alert that matters gets a fix
 PR), and **version updates off** (`open-pull-requests-limit: 0` - routine bumps that fix no

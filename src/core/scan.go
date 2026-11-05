@@ -27,6 +27,8 @@ type Options struct {
 	// Deployment is what they're checked against.
 	Assessor   Assessor
 	Deployment *Deployment
+	// Intel, when set, marks advisories in CISA's KEV catalog and with their EPSS score.
+	Intel *Intel
 }
 
 // assessConcurrency bounds parallel assessment requests.
@@ -126,6 +128,12 @@ func Scan(opts Options) (*Report, error) {
 	if opts.Assessor != nil {
 		assess(findings, opts.Assessor, opts.Deployment, osv.Client)
 		Rejudge(findings)
+	}
+
+	if opts.Intel != nil {
+		if err := opts.Intel.Enrich(findings); err != nil {
+			return nil, fmt.Errorf("exploitation data (--no-exploit-intel skips it): %w", err)
+		}
 	}
 
 	return &Report{Project: lock.Project, Ecosystem: lock.Ecosystem, Findings: findings}, nil

@@ -64,6 +64,9 @@ type Finding struct {
 	Verdict Verdict `json:"verdict"`
 	// Reason explains the verdict in a sentence.
 	Reason string `json:"reason"`
+	// KEV and EPSS are the worst of its advisories' (see exploit.go).
+	KEV  bool    `json:"kev,omitempty"`
+	EPSS float64 `json:"epss,omitempty"`
 }
 
 // Evidence is everything collected about the project, used to judge each finding.
@@ -299,18 +302,31 @@ func Rejudge(findings []Finding) {
 		f.Verdict, f.Reason = f.Advisories[best].Verdict, f.Advisories[best].Reason
 	}
 
+	sortFindings(findings)
+}
+
+// sortFindings puts the known-exploited first, then the most serious verdict, the likeliest
+// to be exploited, the most severe and finally by name.
+func sortFindings(findings []Finding) {
 	sort.Slice(findings, func(i, j int) bool {
-		ri, rj := verdictRank(findings[i].Verdict), verdictRank(findings[j].Verdict)
-		if ri != rj {
-			return ri > rj
+		a, b := findings[i], findings[j]
+		if a.KEV != b.KEV {
+			return a.KEV
 		}
 
-		si, sj := severityRank[findings[i].Severity], severityRank[findings[j].Severity]
-		if si != sj {
-			return si > sj
+		if ra, rb := verdictRank(a.Verdict), verdictRank(b.Verdict); ra != rb {
+			return ra > rb
 		}
 
-		return findings[i].Package < findings[j].Package
+		if a.EPSS != b.EPSS {
+			return a.EPSS > b.EPSS
+		}
+
+		if sa, sb := severityRank[a.Severity], severityRank[b.Severity]; sa != sb {
+			return sa > sb
+		}
+
+		return a.Package < b.Package
 	})
 }
 

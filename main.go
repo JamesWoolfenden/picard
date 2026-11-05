@@ -275,6 +275,10 @@ var assessFlags = []cli.Flag{
 		Value: core.DefaultModel,
 	},
 	&cli.BoolFlag{
+		Name:  "no-exploit-intel",
+		Usage: "skip the CISA KEV and EPSS lookups (offline); without them nothing is held back for being exploited",
+	},
+	&cli.BoolFlag{
 		Name:  "no-cache",
 		Usage: "re-assess advisories instead of reusing cached assessments",
 	},
@@ -304,6 +308,10 @@ func scanOptions(c *cli.Context) (core.Options, error) {
 		}
 
 		opts.Deployment = d
+	}
+
+	if !c.Bool("no-exploit-intel") {
+		opts.Intel = core.NewIntel()
 	}
 
 	if c.Bool("assess") {

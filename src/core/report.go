@@ -56,7 +56,7 @@ func (r Report) WriteTable(w io.Writer) error {
 		return err
 	}
 
-	fixable, coverage := 0, false
+	fixable, coverage, intel := 0, false, false
 
 	for _, f := range r.Findings {
 		if f.FixVersion != "" {
@@ -64,6 +64,7 @@ func (r Report) WriteTable(w io.Writer) error {
 		}
 
 		coverage = coverage || f.Executed != UseUnknown
+		intel = intel || f.KEV || f.EPSS > 0
 	}
 
 	unfixed := len(r.Findings) - fixable
@@ -87,6 +88,10 @@ func (r Report) WriteTable(w io.Writer) error {
 		header += "\tEXECUTED"
 	}
 
+	if intel {
+		header += "\tKEV\tEPSS"
+	}
+
 	fmt.Fprintln(tw, header)
 
 	for _, f := range r.Findings {
@@ -99,6 +104,15 @@ func (r Report) WriteTable(w io.Writer) error {
 			f.Severity, len(f.Advisories), yesNo(f.DirectImport))
 		if coverage {
 			row += "\t" + string(f.Executed)
+		}
+
+		if intel {
+			kev := "-"
+			if f.KEV {
+				kev = "!"
+			}
+
+			row += "\t" + kev + "\t" + fmt.Sprintf("%.2f", f.EPSS)
 		}
 
 		fmt.Fprintln(tw, row)

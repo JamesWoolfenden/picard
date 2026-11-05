@@ -171,6 +171,12 @@ func decide(a Alert, report *Report) AlertDecision {
 		d.Action, d.DismissReason, d.Judged = ActionDismiss, "tolerable_risk", true
 	}
 
+	// Exploited, or likely to be: a person decides, whatever picard found.
+	if note := adv.ExploitNote(); note != "" && d.Action == ActionDismiss {
+		d.Action, d.DismissReason, d.Judged = ActionKeepOpen, "", false
+		d.Reason = "not dismissed: " + note + ". Picard's verdict: " + d.Reason
+	}
+
 	return d
 }
 
