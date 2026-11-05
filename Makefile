@@ -1,4 +1,4 @@
-.PHONY: build install test lint
+.PHONY: build install test lint sbom
 BINARY=picard
 EXE=$(if $(filter Windows_NT,$(OS)),.exe,)
 
@@ -15,3 +15,6 @@ test:
 
 lint:
 	go vet ./...
+
+sbom:
+	syft . -o cyclonedx-json=picard.cdx.json
