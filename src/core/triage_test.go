@@ -156,3 +156,23 @@ func TestWriteVEXMapsVerdictsToStatuses(t *testing.T) {
 		}
 	}
 }
+
+// A package in the lock that no dependency picard read reaches can't be shown not to
+// ship, so it must not be called dev-only.
+func TestTriageTreatsUntracedPackagesAsShipped(t *testing.T) {
+	lock := testLock()
+	lock.Packages["orphan"] = &Package{Name: "orphan", Version: "1"}
+
+	got := byPackage(Triage(map[string][]Advisory{
+		"orphan":  advisory("E", "high", "2"),
+		"testlib": advisory("F", "high", "2"),
+	}, Evidence{Lock: lock}))
+
+	if f := got["orphan"]; f.Verdict != VerdictShipped || !strings.Contains(f.Reason, "couldn't trace") {
+		t.Errorf("orphan: %s - %s", f.Verdict, f.Reason)
+	}
+
+	if f := got["testlib"]; f.Verdict != VerdictNotShipped {
+		t.Errorf("testlib: %s - %s, want still not-shipped", f.Verdict, f.Reason)
+	}
+}

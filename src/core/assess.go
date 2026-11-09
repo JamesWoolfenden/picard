@@ -170,7 +170,7 @@ func describeEvidence(f Finding) string {
 		fmt.Fprintf(&b, "Declared only as a dev dependency, but %s bundles it: the code's imports reach it via %s.\n",
 			f.Bundler, strings.Join(f.Via, " -> "))
 	case f.Shipped:
-		fmt.Fprintf(&b, "Shipped in the production install, pulled in via %s.\n", strings.Join(f.Via, " -> "))
+		fmt.Fprintf(&b, "Shipped in the production install, pulled in via %s.\n", f.chain(" -> "))
 	default:
 		fmt.Fprintf(&b, "Not shipped - only dev/test dependencies pull it in (%s).\n", strings.Join(f.Via, " -> "))
 	}

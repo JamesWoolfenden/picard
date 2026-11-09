@@ -227,6 +227,13 @@ func Triage(advisories map[string][]Advisory, ev Evidence) []Finding {
 			}
 		}
 
+		// In the lock, yet reached from neither the runtime nor the dev dependencies picard
+		// read (a lock format or declaration it doesn't follow): nothing shows it doesn't
+		// ship, so it's treated as shipping rather than dev-only.
+		if !f.Shipped && len(f.Via) == 0 {
+			f.Shipped = true
+		}
+
 		f.DirectImport = ev.Imported[name]
 
 		if ev.Lock.Compiled != nil {
@@ -376,10 +383,19 @@ func firstN(items []string, n int) []string {
 	return items[:n]
 }
 
+// chain is the dependency chain that pulls the package in, for a reason.
+func (f Finding) chain(sep string) string {
+	if len(f.Via) == 0 {
+		return "a path picard couldn't trace (it's in the lock under no dependency picard read, so it's assumed to ship)"
+	}
+
+	return strings.Join(f.Via, sep)
+}
+
 // judgePackage is the verdict from package-level evidence alone - what every advisory gets
 // when there's no assessment to say more.
 func judgePackage(f Finding) (Verdict, string) {
-	via := strings.Join(f.Via, " → ")
+	via := f.chain(" → ")
 
 	switch {
 	case !f.Shipped && f.Bundler != "":

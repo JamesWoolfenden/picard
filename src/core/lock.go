@@ -2,8 +2,10 @@ package core
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -89,7 +91,8 @@ type Lock struct {
 	// EcosystemNPM).
 	Ecosystem string
 	Packages  map[string]*Package
-	// Direct are the project's own runtime dependencies; DevDirect its dev-group ones.
+	// Direct are the project's own runtime dependencies, its extras included; DevDirect its
+	// dev-group ones.
 	Direct    []string
 	DevDirect []string
 	// Compiled are the import paths the build compiles in (Go, from go list -deps across
@@ -178,6 +181,15 @@ func ReadUVLock(path string) (*Lock, error) {
 
 			for _, group := range p.DevDependencies {
 				lock.DevDirect = append(lock.DevDirect, depNames(group)...)
+			}
+
+			// The project's own extras (pip install .[server]) are how it's installed for
+			// production more often than not - one per service - and a lock doesn't say
+			// which ones a deployment uses, so all of them count as runtime.
+			for _, extra := range slices.Sorted(maps.Keys(p.OptionalDependencies)) {
+				deps := p.OptionalDependencies[extra]
+				lock.Direct = mergeNames(lock.Direct, depNames(deps))
+				requested[name] = append(requested[name], deps...)
 			}
 
 			continue
