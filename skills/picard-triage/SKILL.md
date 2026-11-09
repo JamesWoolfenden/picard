@@ -1,7 +1,6 @@
 ---
 name: picard-triage
 description: Work through a repository's Dependabot alerts and PRs with picard - picard supplies the facts (what ships, which advisories each PR fixes, the Dependabot setup), the skill does the judgement (is a bump safe to merge, do an advisory's preconditions hold) and carries out each action with the user. Changes GitHub state only on confirmation.
-disable-model-invocation: true
 ---
 
 # picard triage
