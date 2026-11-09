@@ -165,19 +165,16 @@ func (g *GitHub) do(method, url string, body []byte) (*http.Response, error) {
 	return resp, nil
 }
 
-var remoteRe = regexp.MustCompile(`github\.com[:/]([^/]+/[^/.]+?)(?:\.git)?/?$`)
-
 // RepoFromGit is the owner/name of a checkout's origin remote on GitHub.
 func RepoFromGit(dir string) (string, error) {
-	out, err := exec.Command("git", "-C", dir, "remote", "get-url", "origin").Output()
+	r, err := RemoteFromGit(dir)
 	if err != nil {
-		return "", fmt.Errorf("no origin remote in %s - pass --repo owner/name", dir)
+		return "", err
 	}
 
-	m := remoteRe.FindStringSubmatch(strings.TrimSpace(string(out)))
-	if m == nil {
+	if !r.GitHub() {
 		return "", fmt.Errorf("origin of %s isn't a GitHub repository - pass --repo owner/name", dir)
 	}
 
-	return m[1], nil
+	return r.Path, nil
 }

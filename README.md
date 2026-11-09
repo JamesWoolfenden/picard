@@ -147,6 +147,15 @@ about). Each problem comes with the command or config change that fixes it, and 
 Dependabot PRs are labelled security fix or version bump. Pinning is
 [ghat](https://github.com/JamesWoolfenden/ghat)'s job, so it isn't checked here.
 
+On a GitLab project - gitlab.com or self-managed, from the origin remote or
+`--repo https://host/group/project` - `picard dependabot` checks the GitLab equivalent instead:
+whether dependency scanning is licensed on the instance (it needs Ultimate) and ran in the
+default branch's latest pipeline, with the `.gitlab-ci.yml` include that turns it on, plus the
+count of open findings by severity. It authenticates with `GITLAB_TOKEN` or the token
+`glab auth login --hostname <host>` stored. Reading and dismissing GitLab's findings isn't
+supported yet, so `--apply`, `--prs` and `--lock` are refused there; `picard scan` gives the
+verdicts.
+
 `--prs` reads Dependabot's open pull requests too. For each one, picard scans every lock it
 changes at the PR's base and head commits and compares the advisories, and reports CI and
 whether it's a major version bump - from the title's versions, or for a grouped PR (whose

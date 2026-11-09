@@ -185,6 +185,11 @@ A package's verdict is its most serious advisory's: `reachable` > `shipped` >
   Dependabot's `not_used` and `tolerable_risk` reasons carry picard's reasoning as the
   dismissal comment (truncated to Dependabot's 280 characters).
 - **Dry run by default**, and failures to dismiss one alert don't stop the rest.
+- **GitLab** (`gitlab.go`, `gitlabsettings.go`): a non-GitHub origin gets the setup check
+  only, over GraphQL - `securityScanners` (`available` says the licence allows dependency
+  scanning, `enabled` that it ran in the default branch's latest pipeline) and
+  `vulnerabilitySeveritiesCount` for open findings. A local `.gitlab-ci.yml` that mentions
+  the template but isn't `enabled` is reported as configured-but-not-running.
 
 Replaying pan's 19 fixed alerts against its pre-fix lock matched all 19 to picard's
 advisories: certifi kept open, the 18 filelock/setuptools alerts proposed as

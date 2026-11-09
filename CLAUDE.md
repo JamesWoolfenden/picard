@@ -37,6 +37,8 @@ Module path: `github.com/jameswoolfenden/picard`
   `churn.go` - recent advisory events and the review rules (unused / little used for its cost)
 - `settings.go`, `prs.go` - `picard dependabot`'s setup checks and `--prs` (each PR's locks
   scanned at base and head)
+- `gitlab.go`, `gitlabsettings.go` - GitLab (incl. self-managed) GraphQL client and remote
+  parsing; on a GitLab origin `picard dependabot` runs the dependency scanning setup check only
 - `scan.go` - wires it together
 
 `skills/picard-triage` is the judgement layer on top (a Claude Code skill): picard stays

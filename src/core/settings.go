@@ -214,18 +214,7 @@ func WriteSettings(w io.Writer, repo string, s *DependabotSettings) {
 	width := textWidth()
 
 	fmt.Fprintf(w, "%s: Dependabot setup\n", repo)
-
-	for _, c := range s.Checks {
-		if c.OK {
-			fmt.Fprintf(w, "  ok    %s\n", c.Check)
-
-			continue
-		}
-
-		fmt.Fprintf(w, "  FIX   %s\n", c.Check)
-		fmt.Fprint(w, wrap(c.Problem, "        ", width))
-		fmt.Fprint(w, wrap("fix: "+c.Fix, "        ", width))
-	}
+	writeChecks(w, s.Checks)
 
 	if len(s.PRs) > 0 {
 		fmt.Fprintln(w, "\n  Open Dependabot PRs:")
@@ -241,6 +230,23 @@ func WriteSettings(w io.Writer, repo string, s *DependabotSettings) {
 	}
 
 	fmt.Fprintln(w)
+}
+
+// writeChecks writes one line per check, with the problem and fix under each that fails.
+func writeChecks(w io.Writer, checks []SettingCheck) {
+	width := textWidth()
+
+	for _, c := range checks {
+		if c.OK {
+			fmt.Fprintf(w, "  ok    %s\n", c.Check)
+
+			continue
+		}
+
+		fmt.Fprintf(w, "  FIX   %s\n", c.Check)
+		fmt.Fprint(w, wrap(c.Problem, "        ", width))
+		fmt.Fprint(w, wrap("fix: "+c.Fix, "        ", width))
+	}
 }
 
 // getJSON GETs a URL and decodes the JSON response into v.

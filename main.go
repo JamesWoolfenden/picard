@@ -100,10 +100,11 @@ func main() {
 				Name:  "dependabot",
 				Usage: "checks a repository's Dependabot setup, proposes an action for each alert, and with --apply dismisses the ones that don't reach it",
 				UsageText: "picard dependabot -d path/to/checkout [--repo owner/name] [--apply | --apply-judged]\n" +
-					"   alerts are matched to picard's verdicts by advisory id; dry run unless --apply",
+					"   alerts are matched to picard's verdicts by advisory id; dry run unless --apply\n" +
+					"   on a GitLab project (origin, or --repo https://host/group/project) it checks dependency scanning's setup",
 				Flags: append([]cli.Flag{
 					&cli.StringFlag{Name: "directory", Aliases: []string{"d"}, Usage: "a checkout of the repository", Value: "."},
-					&cli.StringFlag{Name: "repo", Usage: "owner/name (default: the checkout's origin remote)"},
+					&cli.StringFlag{Name: "repo", Usage: "GitHub owner/name, or a GitLab project URL (default: the checkout's origin remote)"},
 					&cli.StringFlag{Name: "state", Usage: "alerts to process: open, fixed, dismissed (fixed + --lock replays past alerts)", Value: "open"},
 					&cli.StringFlag{Name: "lock", Usage: "use this lock file for every alert instead of the checkout's (replaying past alerts)"},
 					&cli.StringFlag{Name: "coverage", Aliases: []string{"c"}, Usage: "coverage.py JSON report for the Python lock"},
@@ -113,16 +114,20 @@ func main() {
 					&cli.StringFlag{Name: "format", Aliases: []string{"f"}, Usage: "output format: table or json", Value: "table"},
 				}, assessFlags...),
 				Action: func(c *cli.Context) error {
-					opts, err := scanOptions(c)
+					remote, err := dependabotRemote(c)
 					if err != nil {
 						return err
 					}
 
-					repo := c.String("repo")
-					if repo == "" {
-						if repo, err = core.RepoFromGit(opts.Directory); err != nil {
-							return err
-						}
+					if !remote.GitHub() {
+						return gitlabSetup(c, remote)
+					}
+
+					repo := remote.Path
+
+					opts, err := scanOptions(c)
+					if err != nil {
+						return err
 					}
 
 					gh, err := core.NewGitHub()
@@ -328,4 +333,55 @@ func scanOptions(c *cli.Context) (core.Options, error) {
 	}
 
 	return opts, nil
+}
+
+// dependabotRemote is the repository `picard dependabot` works on: --repo (a GitHub
+// owner/name, or a URL to any host), else the checkout's origin remote.
+func dependabotRemote(c *cli.Context) (core.Remote, error) {
+	repo := c.String("repo")
+	if repo == "" {
+		return core.RemoteFromGit(c.String("directory"))
+	}
+
+	if r, ok := core.ParseRemote(repo); ok {
+		return r, nil
+	}
+
+	return core.Remote{Host: "github.com", Path: repo}, nil
+}
+
+// gitlabSetup checks a GitLab project's dependency scanning setup. Reading and dismissing
+// alerts is GitHub-only for now, so the flags for that are refused rather than ignored.
+func gitlabSetup(c *cli.Context, remote core.Remote) error {
+	for _, flag := range []string{"apply", "apply-judged", "prs", "lock"} {
+		if c.IsSet(flag) {
+			return fmt.Errorf("--%s needs GitHub's Dependabot alerts; %s is a GitLab project", flag, remote.Host)
+		}
+	}
+
+	gl, err := core.NewGitLab(remote.Host)
+	if err != nil {
+		return err
+	}
+
+	settings, err := core.CheckGitLabSettings(gl, remote.Path, c.String("directory"))
+	if err != nil {
+		return err
+	}
+
+	switch c.String("format") {
+	case "json":
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+
+		return enc.Encode(map[string]any{"settings": settings})
+	case "table":
+		core.WriteGitLabSettings(os.Stdout, remote.Path, settings)
+		fmt.Printf("picard doesn't read GitLab's findings yet; `picard scan -d %s` gives its verdicts for this checkout.\n",
+			c.String("directory"))
+
+		return nil
+	default:
+		return fmt.Errorf("unknown format %q (table or json)", c.String("format"))
+	}
 }

@@ -91,6 +91,9 @@ is the check.)
 The JSON has three sections:
 - `settings.checks` - Dependabot alerts / security updates / version updates, each `ok` or a
   `problem` with its `fix`; `settings.pull_requests` - Dependabot's open PRs.
+  On a GitLab project the JSON is only `settings`: one `GitLab dependency scanning` check and
+  `open_findings` by severity - there are no alerts or PRs to work through, so report the
+  setup and use `picard scan` for the verdicts.
 - `alerts` - one per open alert: picard's `verdict`, `reason`, proposed `action`
   (keep-open / dismiss / skip), `dismiss_reason`, and `judged` (rests on coverage or a
   model's assessment rather than lock facts). The alert itself is nested under `.alert`:

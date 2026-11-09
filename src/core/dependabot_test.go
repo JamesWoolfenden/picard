@@ -150,14 +150,24 @@ func TestLockForManifest(t *testing.T) {
 	}
 }
 
-func TestRepoFromRemote(t *testing.T) {
-	for remote, want := range map[string]string{
-		"https://github.com/JamesWoolfenden/pan.git": "JamesWoolfenden/pan",
-		"git@github.com:JamesWoolfenden/ghat.git":    "JamesWoolfenden/ghat",
-		"https://github.com/o/r":                     "o/r",
+func TestParseRemote(t *testing.T) {
+	for remote, want := range map[string]Remote{
+		"https://github.com/JamesWoolfenden/pan.git":                {"github.com", "JamesWoolfenden/pan"},
+		"git@github.com:JamesWoolfenden/ghat.git":                   {"github.com", "JamesWoolfenden/ghat"},
+		"https://github.com/o/r":                                    {"github.com", "o/r"},
+		"https://code.example.com/team/sub/project.git":             {"code.example.com", "team/sub/project"},
+		"git@code.example.com:team/project.git":                     {"code.example.com", "team/project"},
+		"ssh://git@code.example.com:2222/team/sub/project.git":      {"code.example.com", "team/sub/project"},
+		"https://oauth2:secret@Code.Example.com/team/project.git\n": {"code.example.com", "team/project"},
 	} {
-		if m := remoteRe.FindStringSubmatch(remote); m == nil || m[1] != want {
-			t.Errorf("%s -> %v, want %s", remote, m, want)
+		if got, ok := ParseRemote(remote); !ok || got != want {
+			t.Errorf("ParseRemote(%q) = %+v, %v, want %+v", remote, got, ok, want)
+		}
+	}
+
+	for _, bad := range []string{"", "/srv/git/repo", "https://example.com/justone"} {
+		if got, ok := ParseRemote(bad); ok {
+			t.Errorf("ParseRemote(%q) = %+v, want no match", bad, got)
 		}
 	}
 }
