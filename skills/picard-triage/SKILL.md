@@ -13,8 +13,11 @@ preconditions here. That's this skill's job, and then acting on the result with 
 
 **Arguments:**
 - Optional: a path to a checkout of the repository (default `.`).
+- Optional: a GitHub owner (`JamesWoolfenden`) instead of a path - triage every repo they
+  have, starting at step 0.
 - Optional: `--dry-run` - investigate and present the plan, take no action.
-- Usage: `/picard-triage`, `/picard-triage C:\code\garmin-mcp-gt`, `/picard-triage --dry-run`
+- Usage: `/picard-triage`, `/picard-triage C:\code\garmin-mcp-gt`, `/picard-triage JamesWoolfenden`,
+  `/picard-triage --dry-run`
 
 **Rules that hold throughout:**
 - **Every outward action is confirmed first** - merge, close, comment, dismiss, change a
@@ -23,12 +26,46 @@ preconditions here. That's this skill's job, and then acting on the result with 
   step 3b.
 - **picard's facts are checked, not trusted blindly** - and never contradicted without
   evidence. If picard is wrong, say so, and offer to report it (step 6).
+- **Standing approval is allowed, but ask for it once.** Confirming every item separately
+  costs a round trip each. After the first confirmed upgrade, offer a class-level approval -
+  e.g. "push dependency upgrades to each repo's default branch when the tests pass and
+  `picard scan` shows nothing reachable?" - and then do that class without asking again.
+  Anything outside the class (a merge, a dismissal, a setting) is still its own question.
+- **A dismissal's comment states only what you verified.** "Dev-only build dependency" is a
+  claim about the build, not about picard's verdict - a bundled app ships its devDependencies.
+  Say what was checked and by what (picard's `not-shipped`, a call graph, the lock chain), and
+  where picard's verdict could be wrong for this kind of project, say so instead of asserting it.
 - **Pinning isn't this skill's job** - an unpinned manifest is ghat's (`ghat audit`, and
   JamesWoolfenden/ghat#32 for requirements files). Point at it; don't pin here.
 
 ---
 
 # Process
+
+## 0. A whole account (owner argument only)
+
+Skip this for a single repository. For an owner, get the picture before touching anything:
+
+```shell
+gh search prs --owner <owner> --author "app/dependabot" --state open --limit 200 --json repository,title,url
+gh repo list <owner> --no-archived --source --limit 300 --json name -q '.[].name'
+```
+
+then, per repo, `gh api "repos/<owner>/<repo>/dependabot/alerts?state=open&per_page=100" --jq length`
+(a 403 "Dependabot alerts are disabled" means that repo is **not being checked** - list those,
+and offer to turn them on). Make a roll-up table (repo, open alerts, open PRs, checked out
+locally?) and show it first.
+
+Clone the repos that have alerts or PRs and aren't checked out (`gh repo clone`, next to the
+others), then run steps 1-2 for each, in parallel where independent, and show **one** roll-up of
+verdicts per repo. Work through the repos one at a time from step 3, biggest first - the same
+few packages (go-git, otel, grpc, go-jose) often account for most of a family of repos, so a
+fix found for one is cheap to repeat.
+
+Before investing in a repo, check it is alive: the date of the last real commit, and ask if it
+looks abandoned. A retired app doesn't need a framework migration - offer to archive or delete
+it, after checking what would be lost (unpushed commits, stars, forks, open issues, whether
+anything else references it).
 
 ## 1. Collect the facts
 
@@ -39,14 +76,19 @@ picard dependabot -d <path> --prs --format json > <scratch>/dependabot.json
 ```
 
 If `picard` isn't on PATH, or `dependabot` / `--prs` is unknown, stop: the user needs
-`make install` in their picard checkout.
+`make install` in their picard checkout. (There is no `--version` flag; `picard dependabot --help`
+is the check.)
 
 The JSON has three sections:
 - `settings.checks` - Dependabot alerts / security updates / version updates, each `ok` or a
   `problem` with its `fix`; `settings.pull_requests` - Dependabot's open PRs.
 - `alerts` - one per open alert: picard's `verdict`, `reason`, proposed `action`
   (keep-open / dismiss / skip), `dismiss_reason`, and `judged` (rests on coverage or a
-  model's assessment rather than lock facts).
+  model's assessment rather than lock facts). The alert itself is nested under `.alert`:
+  `.alert.number`, `.alert.dependency.package.name`, `.alert.dependency.manifest_path`,
+  `.alert.security_advisory.{ghsa_id,severity,summary}`,
+  `.alert.security_vulnerability.first_patched_version.identifier`. A jq on `.number` or
+  `.package` returns null.
 - `pull_requests` - one per PR: `class` (fixes-shipped, fixes-dev-only, adds-advisory,
   fixes-nothing, no-install-change, unknown), `removes` / `adds` advisories with verdicts,
   `ci`, `major` (absent = couldn't be checked, not false) with `major_changes` (each package
@@ -103,9 +145,19 @@ For the package going from major X to Y:
 2. Read the release notes / changelog / migration guide between the two versions (GitHub
    releases via `gh release list -R <repo>` / `gh api`, or the package's changelog). Note
    every breaking change that touches a name the project uses.
-3. If the project's tests are quick, check out the PR branch in a worktree and run them.
+3. **Check the peer dependencies of the new major.** A grouped Dependabot PR bumps the named
+   packages and leaves the rest: `npm view <pkg>@<new> peerDependencies` (and `engines`)
+   against what the project has. Kit 3 needing vite 8 and TypeScript 6 while the PR left
+   both alone is the typical failure - and the only CI may be a secret scanner, so a green PR
+   proves nothing.
+4. Build it, in a scratch copy outside the repo (`git archive <head> | tar -x -C <scratch>`,
+   then install and build; `git archive` leaves untracked files out, and a scratch path with odd
+   characters can break tools like `vsce`, so compare against a baseline build before blaming
+   the change). Prefer the project's real build over `check`/lint, which may already fail.
 
-Report: the breaking changes that apply, those that don't, and the test result.
+Report: the breaking changes that apply, those that don't, the peer dependencies, and the
+build and test result. If a major bump is the only fix for a low-severity dev-only alert in a
+project that is barely used, say that migrating costs more than the alert, and let the user decide.
 
 **For `no-install-change` floor bumps, the major question is already settled in
 production:** an unpinned `>=1.13.0` already installs 2.x on every build. Check the code
@@ -180,10 +232,13 @@ it in the plan if `picard surface` flags anything, but don't do it here.
 
 ## 4. Propose the plan
 
-One list, most valuable first:
+One list, most valuable first. **Fix before you dismiss**: an upgrade usually closes the
+alerts a judged dismissal would have papered over, and Dependabot closes them by itself within
+a minute of the push.
 1. merges of PRs that fix shipped advisories,
-2. upgrades for shipped advisories without a PR,
-3. dismissals (facts, then judged - each with its reason),
+2. upgrades for shipped advisories without a PR - then rescan (step 5),
+3. dismissals of what is *left* after the upgrades and has no fix (facts first, then judged -
+   each with its reason),
 4. closes of noise PRs,
 5. setup changes.
 
@@ -200,21 +255,43 @@ changing nothing installed?"), individually where they aren't.
   `gh pr merge <n> --squash` (or the allowed one).
 - **Close**: `gh pr close <n> --comment "<why>"`. Dependabot won't reopen that version; if
   the user wants no more PRs for the package, comment `@dependabot ignore this dependency`.
-- **Dismiss**: for all fact-based dismissals, `picard dependabot -d <path> --apply`; for
+- **Dismiss** (only what no upgrade fixes): for all fact-based dismissals, `picard dependabot -d <path> --apply`; for
   judged ones the user agreed with, `--apply-judged`. If the user approved only some, dismiss
   those individually:
   `gh api -X PATCH repos/<repo>/dependabot/alerts/<n> -f state=dismissed -f dismissed_reason=<reason> -f dismissed_comment="<picard's reason, ≤280 chars>"`.
 - **Upgrade**: on a branch, update the lock, re-run `picard scan` to confirm the advisory is
   gone, run the tests, commit following the repo's conventions, and open a PR (or push, if
-  the user works straight on the main branch).
+  the user works straight on the main branch). Take the **highest** `fix_version` across the
+  package's advisories, not the lowest, and **rescan after the upgrade and repeat until nothing
+  is reachable**: new advisories keep appearing (a patch release of gRPC, a newer `x/net`, the
+  Go standard library), and a bump that pulls in a dependency's own minimum
+  (`x/net` needing a newer `x/text`) is normal - `go get` both together. For Go, raise the
+  `go` line when the stdlib advisory is the remaining one, and check the Dockerfile and CI pin
+  the same Go.
+- **Commits**: edit files **byte-for-byte** - many repos here use CRLF, and `sed -i` or a jq
+  round trip rewrites every line ending (or an escape like `\u2014`) and turns a 3-line change
+  into a whole-file diff; check `git diff --stat` before committing. Read the hook config
+  (`.pre-commit-config.yaml`) first: autofix hooks (`pretty-format-json`) re-sort a lockfile's
+  keys, and linters can exit non-zero on informational findings. Fix the cause (exclude the
+  lockfile, add a suppression with a reason, raise the severity floor - and say so) with the
+  user's say-so; never `--no-verify`.
 - **Setup**: run the `fix` command; for `dependabot.yml`, edit, commit, push as above.
 
 After each action, report what was done and where (PR URL, alert number).
 
 ## 6. Confirm and close out
 
-Re-run `picard dependabot -d <path> --prs` and show the result - what's left, and why.
+Show what's left, and why. After a fix, `picard dependabot` reports the alerts as `skip`
+("already fixed in the lock") - that is not a failure. Read the real state from GitHub:
+`gh api "repos/<repo>/dependabot/alerts?state=open" --jq length` (Dependabot re-evaluates within
+about a minute of a push; an alert still open straight after is usually just not re-scanned
+yet), and `gh pr list --author "app/dependabot"`. Then rerun `picard scan` per lock to confirm
+nothing is shipped or reachable.
 
 If picard was wrong anywhere (a verdict the evidence contradicts, a PR misclassified, a
 manifest it should have read), say exactly how, and offer to open an issue on
 JamesWoolfenden/picard with the repo, the item, what picard said and what was true.
+
+**A large `skip` class is a finding too.** When a big share of the alerts can't be judged because
+picard doesn't read their manifest (a quarter or more), say so in step 2 and offer the issue
+straight away instead of at the end; the fix is usually a reader, not a workaround.
