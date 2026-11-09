@@ -10,6 +10,49 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
+// Versions is every version the lock installs of each package: its locked version, its
+// variants' versions, and (npm) each "name@version" install a package is locked at.
+func (l *Lock) Versions() map[string][]string {
+	set := map[string]map[string]bool{}
+	add := func(name, version string) {
+		if name == "" || version == "" {
+			return
+		}
+
+		if set[name] == nil {
+			set[name] = map[string]bool{}
+		}
+
+		set[name][version] = true
+	}
+
+	for name, p := range l.Packages {
+		add(name, p.Version)
+
+		for _, v := range p.Variants {
+			add(name, v.Version)
+		}
+	}
+
+	for node := range l.Nodes {
+		if i := strings.LastIndex(node, "@"); i > 0 {
+			add(node[:i], node[i+1:])
+		}
+	}
+
+	out := make(map[string][]string, len(set))
+
+	for name, versions := range set {
+		for v := range versions {
+			out[name] = append(out[name], v)
+		}
+
+		sort.Strings(out[name])
+	}
+
+	return out
+}
+
 // Package is one resolved distribution from a lock file.
 type Package struct {
 	Name    string

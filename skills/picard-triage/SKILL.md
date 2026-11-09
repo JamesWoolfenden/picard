@@ -49,7 +49,8 @@ The JSON has three sections:
   model's assessment rather than lock facts).
 - `pull_requests` - one per PR: `class` (fixes-shipped, fixes-dev-only, adds-advisory,
   fixes-nothing, no-install-change, unknown), `removes` / `adds` advisories with verdicts,
-  `ci`, `major`, `from` / `to`, `files`.
+  `ci`, `major` (absent = couldn't be checked, not false) with `major_changes` (each package
+  that moved major, from the lock diff), `from` / `to` (empty for a grouped PR), `files`.
 
 Then scan each lock in the repo for advisories Dependabot has **no alert for** - OSV knows
 some GitHub doesn't:

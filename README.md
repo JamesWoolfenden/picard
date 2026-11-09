@@ -149,7 +149,10 @@ Dependabot PRs are labelled security fix or version bump. Pinning is
 
 `--prs` reads Dependabot's open pull requests too. For each one, picard scans every lock it
 changes at the PR's base and head commits and compares the advisories, and reports CI and
-whether it's a major version bump:
+whether it's a major version bump - from the title's versions, or for a grouped PR (whose
+title names none) from the lock diff, listing each package that moved major in
+`major_changes`. `major` is left out of the JSON when neither could be read, so an unchecked
+PR isn't mistaken for a safe one:
 
 | Class | Meaning |
 |---|---|

@@ -75,6 +75,73 @@ func TestPRTitleParsing(t *testing.T) {
 	}
 }
 
+// A grouped PR's title names no versions: whether it moved a major version has to come from
+// the lock diff, and a PR whose locks couldn't be read stays unknown instead of "false".
+func TestGroupedPRMajor(t *testing.T) {
+	base, err := os.ReadFile("testdata/ui-package-lock.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	major := strings.Replace(string(base), `"node_modules/@scope/kit": { "version": "1.2.0"`, `"node_modules/@scope/kit": { "version": "2.0.0"`, 1)
+	minor := strings.Replace(string(base), `"node_modules/react": { "version": "18.3.1"`, `"node_modules/react": { "version": "18.4.0"`, 1)
+
+	osv := uuidOSV()
+	defer osv.Close()
+
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/o/r/pulls/1/files", "/repos/o/r/pulls/2/files":
+			_ = json.NewEncoder(w).Encode([]map[string]string{{"filename": "ui/package.json"}, {"filename": "ui/package-lock.json"}})
+		case "/repos/o/r/pulls/3/files":
+			_ = json.NewEncoder(w).Encode([]map[string]string{{"filename": "Dockerfile"}})
+		case "/repos/o/r/contents/ui/package-lock.json":
+			switch r.URL.Query().Get("ref") {
+			case "head1":
+				_, _ = w.Write([]byte(major))
+			case "head2":
+				_, _ = w.Write([]byte(minor))
+			default:
+				_, _ = w.Write(base)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gh.Close()
+
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{"ui/package-lock.json": string(base), "ui/src/index.js": `import React from 'react';`})
+
+	pr := func(n int, title, sha string) PullRequest {
+		p := PullRequest{Number: n, Title: title}
+		p.Head.SHA, p.Base.SHA = sha, "base"
+
+		return p
+	}
+
+	got, err := TriagePRs(&GitHub{BaseURL: gh.URL, Client: gh.Client()}, "o/r", dir, []PullRequest{
+		pr(1, "build(deps): bump @scope/kit and react", "head1"),
+		pr(2, "deps(deps): bump the minor-and-patch group with 2 updates", "head2"),
+		pr(3, "docker(deps): bump the base group", "head3"),
+	}, Options{OSV: &OSV{BaseURL: osv.URL, Client: osv.Client()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if g := got[0]; g.Major == nil || !*g.Major || !reflect.DeepEqual(g.MajorChanges, []string{"@scope/kit 1.2.0 → 2.0.0"}) {
+		t.Errorf("major group = %+v", g)
+	}
+
+	if g := got[1]; g.Major == nil || *g.Major || len(g.MajorChanges) != 0 {
+		t.Errorf("minor group = %+v", g)
+	}
+
+	if g := got[2]; g.Major != nil {
+		t.Errorf("unreadable group should leave major unknown, got %+v", *g.Major)
+	}
+}
+
 // garmin-mcp-gt's PRs in miniature: a lock bump that removes an advisory, and a requirement
 // floor raised in an unpinned file.
 func TestTriagePRs(t *testing.T) {
@@ -132,11 +199,11 @@ func TestTriagePRs(t *testing.T) {
 
 	bump := got[0]
 	if bump.Class != PRFixesDevOnly || len(bump.Removes) != 1 || bump.Removes[0].Package != "uuid" ||
-		!bump.Major || bump.CI != "passing" || bump.Package != "vitest" {
+		bump.Major == nil || !*bump.Major || bump.CI != "passing" || bump.Package != "vitest" {
 		t.Errorf("bump = %+v", bump)
 	}
 
-	if floor := got[1]; floor.Class != PRNoInstallChange || floor.Major {
+	if floor := got[1]; floor.Class != PRNoInstallChange || floor.Major == nil || *floor.Major {
 		t.Errorf("floor = %+v", floor)
 	}
 }

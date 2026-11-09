@@ -16,6 +16,9 @@ type Report struct {
 	// Ecosystem is the registry the packages come from (PyPI or npm); empty means PyPI.
 	Ecosystem string    `json:"ecosystem,omitempty"`
 	Findings  []Finding `json:"findings"`
+	// Versions are every version the lock installs of each package (not only the ones with
+	// advisories), so a PR's lock diff can say which packages moved major version.
+	Versions map[string][]string `json:"-"`
 }
 
 // purl is the package URL for a package in the report's ecosystem, with the version when

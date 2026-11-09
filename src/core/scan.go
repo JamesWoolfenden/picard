@@ -136,7 +136,7 @@ func Scan(opts Options) (*Report, error) {
 		}
 	}
 
-	return &Report{Project: lock.Project, Ecosystem: lock.Ecosystem, Findings: findings}, nil
+	return &Report{Project: lock.Project, Ecosystem: lock.Ecosystem, Findings: findings, Versions: lock.Versions()}, nil
 }
 
 // runGoVulnCheck is govulncheck's findings for the module, or nil when they can't be had.

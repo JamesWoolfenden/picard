@@ -43,11 +43,16 @@ type PRTriage struct {
 	Number int    `json:"number"`
 	Title  string `json:"title"`
 	URL    string `json:"url"`
-	// Package, From and To are parsed from the title; Major is a change of major version.
+	// Package, From and To are parsed from the title (a grouped PR's title names no
+	// versions, so they stay empty).
 	Package string `json:"package"`
 	From    string `json:"from"`
 	To      string `json:"to"`
-	Major   bool   `json:"major"`
+	// Major is whether anything moved major version: from the title's versions, or from the
+	// lock diff (MajorChanges lists each package, "name 2.70.4 → 3.1.1"). It's omitted when
+	// neither could be read - unknown is not the same as false.
+	Major        *bool    `json:"major,omitempty"`
+	MajorChanges []string `json:"major_changes,omitempty"`
 	// Files the PR changes; Locks the ones picard compared.
 	Files []string `json:"files"`
 	Locks []string `json:"locks"`
@@ -79,7 +84,10 @@ func TriagePRs(gh *GitHub, repo, dir string, prs []PullRequest, scan Options) ([
 
 		if m := prTitleRe.FindStringSubmatch(pr.Title); m != nil {
 			t.Package, t.From, t.To = m[1], m[2], m[3]
-			t.Major = isVersion(t.From) && isVersion(t.To) && majorOf(t.From) != majorOf(t.To)
+			if isVersion(t.From) && isVersion(t.To) {
+				major := majorOf(t.From) != majorOf(t.To)
+				t.Major = &major
+			}
 		}
 
 		var files []struct {
@@ -143,6 +151,18 @@ func (t *PRTriage) compare(gh *GitHub, api, dir string, pr PullRequest, scan Opt
 
 		t.Removes = append(t.Removes, advisoryDiff(before, after)...)
 		t.Adds = append(t.Adds, advisoryDiff(after, before)...)
+		t.MajorChanges = append(t.MajorChanges, majorChanges(before.Versions, after.Versions)...)
+	}
+
+	// The locks were read, so a major change anywhere in them is a fact, and none is a
+	// negative: that settles a PR whose title named no versions.
+	switch {
+	case len(t.MajorChanges) > 0:
+		major := true
+		t.Major = &major
+	case t.Major == nil:
+		major := false
+		t.Major = &major
 	}
 
 	shipped := 0
@@ -173,6 +193,52 @@ func (t *PRTriage) compare(gh *GitHub, api, dir string, pr PullRequest, scan Opt
 	}
 
 	return nil
+}
+
+// majorChanges lists the packages whose installed major version differs between two locks
+// ("name 2.70.4 → 3.1.1"). A package only in one lock (added or removed) is not a bump.
+func majorChanges(before, after map[string][]string) []string {
+	majors := func(versions []string) map[string]bool {
+		out := map[string]bool{}
+
+		for _, v := range versions {
+			out[majorOf(v)] = true
+		}
+
+		return out
+	}
+
+	var out []string
+
+	for name, was := range before {
+		now, ok := after[name]
+		if !ok {
+			continue
+		}
+
+		wasMajors, nowMajors := majors(was), majors(now)
+		gained, lost := false, false
+
+		for m := range nowMajors {
+			if !wasMajors[m] {
+				gained = true
+			}
+		}
+
+		for m := range wasMajors {
+			if !nowMajors[m] {
+				lost = true
+			}
+		}
+
+		if gained && lost {
+			out = append(out, fmt.Sprintf("%s %s → %s", name, strings.Join(was, ","), strings.Join(now, ",")))
+		}
+	}
+
+	sort.Strings(out)
+
+	return out
 }
 
 // prLocks maps the files a PR changes to the locks picard can compare (repo-relative), and
@@ -390,7 +456,14 @@ func WritePRs(w io.Writer, repo string, prs []PRTriage) error {
 
 	for _, p := range prs {
 		change := p.From + " → " + p.To
-		if p.Major {
+		if p.From == "" {
+			change = plural(len(p.MajorChanges), "major change")
+			if len(p.MajorChanges) == 0 {
+				change = "grouped"
+			}
+		}
+
+		if p.Major != nil && *p.Major && len(p.MajorChanges) == 0 {
 			change += " (major)"
 		}
 
@@ -404,6 +477,10 @@ func WritePRs(w io.Writer, repo string, prs []PRTriage) error {
 	for _, p := range prs {
 		fmt.Fprintf(w, "\n#%d %s\n", p.Number, p.Title)
 		fmt.Fprint(w, wrap(p.Reason, "  ", width))
+
+		for _, m := range p.MajorChanges {
+			fmt.Fprint(w, wrap("major: "+m, "  ", width))
+		}
 
 		for _, a := range p.Adds {
 			fmt.Fprint(w, wrap(fmt.Sprintf("adds %s %s %s (%s, %s): %s", a.Package, a.Version, a.ID, a.Severity, a.Verdict, a.Summary), "  ", width))
