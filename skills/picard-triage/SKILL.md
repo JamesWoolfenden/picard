@@ -44,17 +44,26 @@ preconditions here. That's this skill's job, and then acting on the result with 
 
 ## 0. A whole account (owner argument only)
 
-Skip this for a single repository. For an owner, get the picture before touching anything:
+Skip this for a single repository. For an owner, get the picture before touching anything -
+in **one GraphQL query**, not a call per repo (268 repos took ~26 seconds this way, and minutes
+as a REST loop):
 
 ```shell
-gh search prs --owner <owner> --author "app/dependabot" --state open --limit 200 --json repository,title,url
-gh repo list <owner> --no-archived --source --limit 300 --json name -q '.[].name'
+gh api graphql --paginate -f query='query($endCursor:String){repositoryOwner(login:"<owner>"){
+  repositories(first:100,after:$endCursor,isArchived:false,isFork:false,ownerAffiliations:OWNER){
+    pageInfo{hasNextPage endCursor}
+    nodes{name pushedAt hasVulnerabilityAlertsEnabled vulnerabilityAlerts(states:OPEN){totalCount}
+      pullRequests(states:OPEN,first:20){nodes{number title author{login}}}}}}}' \
+  --jq '.data.repositoryOwner.repositories.nodes[]'
 ```
 
-then, per repo, `gh api "repos/<owner>/<repo>/dependabot/alerts?state=open&per_page=100" --jq length`
-(a 403 "Dependabot alerts are disabled" means that repo is **not being checked** - list those,
-and offer to turn them on). Make a roll-up table (repo, open alerts, open PRs, checked out
-locally?) and show it first.
+The Dependabot PRs are the ones whose `author.login` is `dependabot`. A repo with
+`hasVulnerabilityAlertsEnabled: false` is **not being checked**: before offering to turn it on,
+look for dependency manifests (`gh api repos/<owner>/<repo>/git/trees/HEAD?recursive=1`, paths
+ending `go.mod`, `package.json`, `requirements*.txt`, `Pipfile.lock`, `uv.lock`, ...). A repo with
+none (a Terraform module, a docs repo) gains nothing from alerts - say so rather than listing it
+as a gap. Make a roll-up table (repo, open alerts, open PRs, alerts enabled, checked out
+locally?) and show it first; when nothing has alerts or PRs, say that and stop.
 
 Clone the repos that have alerts or PRs and aren't checked out (`gh repo clone`, next to the
 others), then run steps 1-2 for each, in parallel where independent, and show **one** roll-up of
