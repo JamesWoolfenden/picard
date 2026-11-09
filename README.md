@@ -11,9 +11,9 @@ Named for Jean-Luc Picard: weigh the reports, decide, make it so.
 
 ## What it checks
 
-For a [uv](https://docs.astral.sh/uv/) project (`uv.lock`), an npm project
-(`package-lock.json`) or a Go module (`go.mod`) - npm and Go with fewer checks, see
-Limitations:
+For a [uv](https://docs.astral.sh/uv/) project (`uv.lock`), a pipenv project
+(`Pipfile.lock`) or pinned `requirements.txt`, an npm or yarn project (`package-lock.json`,
+`yarn.lock`) or a Go module (`go.mod`) - the rest with fewer checks, see Limitations:
 
 1. **Advisories** - looks up every locked package version in [OSV](https://osv.dev) (the
    same GitHub advisory data Dependabot uses, plus PyPI's and Go's), and groups them by the
@@ -312,6 +312,15 @@ The VEX output is a *proposal* to review, not a decision: commit it once you agr
 - **Static imports only**: `importlib`/`__import__` aren't seen; coverage covers them.
 - **Platform markers are ignored**: a dependency only installed on Windows still counts as
   shipped. Conservative, never under-reports.
+- Flat Python locks: `Pipfile.lock` and a requirements file (`name==1.2.3` lines; ranges
+  aren't locked, and a file that pins nothing is an error). They record versions but not who
+  depends on whom, so every package in the runtime group (`default`, or a plain
+  `requirements.txt`) counts as a direct runtime dependency, and `develop` or a
+  `requirements-dev.txt`/`test-requirements.txt` as the dev set. That errs towards
+  "shipped", and can't say "only a dev tool pulls this in" within a group.
+- yarn: `yarn.lock` classic (v1) and berry (v2+). It's read like `package-lock.json` -
+  the same graph, bundler and import checks - with the project's runtime and dev
+  dependencies taken from the `package.json` beside it, so that file is required.
 - Lock files: `uv.lock` and npm's `package-lock.json` (lockfileVersion 2 or 3). For npm,
   picard checks advisories, whether each package ships (runtime `dependencies` vs
   `devDependencies`) and whether your own non-test JS/TS imports it. When the project builds

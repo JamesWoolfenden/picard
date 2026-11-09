@@ -59,7 +59,8 @@ some GitHub doesn't:
 picard scan -d <lock directory> --format json
 ```
 
-for every directory holding a `uv.lock`, `package-lock.json` or `go.mod` (skip
+for every directory holding a `uv.lock`, `Pipfile.lock`, `package-lock.json`, `yarn.lock`,
+`go.mod` or a pinned `requirements.txt` (skip
 `node_modules`, `.venv`, `vendor`). For Go this includes the standard library, which
 Dependabot never alerts on - expect unalerted stdlib advisories.
 Keep the advisories with a shipped verdict (`reachable`, `shipped`) that match no alert;
@@ -139,7 +140,8 @@ without them, unless they're `not-shipped` or clearly outweighed by what it remo
   that platform?). Say for each whether you agree.
 - **`keep-open`** - find the fix: an open PR whose `removes` covers it, else the upgrade
   that does (`fix_version` from `picard scan`), and how to apply it
-  (`uv lock --upgrade-package <pkg>`, `npm update <pkg>` / `npm install <pkg>@<version>`
+  (`uv lock --upgrade-package <pkg>`, `pipenv update <pkg>`, `npm update <pkg>` /
+  `npm install <pkg>@<version>`, `yarn upgrade <pkg>`, or the pinned line in `requirements.txt`,
   in the lock's directory).
 - **Go `reachable`** - `go_reach.trace` (in `picard scan --format json`) is the call path
   from the project's code to the vulnerable function. Read it: govulncheck errs towards

@@ -65,12 +65,18 @@ func Scan(opts Options) (*Report, error) {
 		}
 
 		goReach = runGoVulnCheck(lockFile, opts.Directory, lock)
-	case "package-lock.json":
+	case "package-lock.json", "yarn.lock":
 		if opts.Coverage != "" {
 			return nil, fmt.Errorf("--coverage is a coverage.py report: it doesn't apply to an npm lock")
 		}
 
-		if lock, err = ReadNPMLock(lockFile); err != nil {
+		if filepath.Base(lockFile) == "yarn.lock" {
+			lock, err = ReadYarnLock(lockFile, opts.Directory)
+		} else {
+			lock, err = ReadNPMLock(lockFile)
+		}
+
+		if err != nil {
 			return nil, err
 		}
 
@@ -81,7 +87,7 @@ func Scan(opts Options) (*Report, error) {
 
 		imported = imports.Production
 	default:
-		if lock, err = ReadUVLock(lockFile); err != nil {
+		if lock, err = readPythonLock(lockFile); err != nil {
 			return nil, err
 		}
 
@@ -166,7 +172,19 @@ func runGoVulnCheck(goMod, dir string, lock *Lock) map[string]*GoReach {
 }
 
 // LockFiles are the files picard reads, in the order it looks for them.
-var LockFiles = []string{"uv.lock", "package-lock.json", "go.mod"}
+var LockFiles = []string{"uv.lock", "Pipfile.lock", "package-lock.json", "yarn.lock", "go.mod", "requirements.txt"}
+
+// readPythonLock reads uv.lock, Pipfile.lock or a pinned requirements file.
+func readPythonLock(lockFile string) (*Lock, error) {
+	switch base := filepath.Base(lockFile); {
+	case base == "Pipfile.lock":
+		return ReadPipfileLock(lockFile)
+	case IsRequirementsFile(base):
+		return ReadRequirements(lockFile)
+	default:
+		return ReadUVLock(lockFile)
+	}
+}
 
 // NoLockFileError: the directory has none of the lock files picard reads.
 type NoLockFileError struct{ Directory string }

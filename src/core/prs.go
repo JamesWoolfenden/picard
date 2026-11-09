@@ -247,18 +247,30 @@ func majorChanges(before, after map[string][]string) []string {
 func prLocks(dir string, files []string) (locks, unread, stale []string) {
 	for _, f := range files {
 		switch path.Base(f) {
-		case "uv.lock", "package-lock.json", "go.mod":
+		case "uv.lock", "package-lock.json", "go.mod", "Pipfile.lock", "yarn.lock":
 			locks = append(locks, f)
 		case "go.sum": // compared through go.mod, which a Go dependency PR always changes
 			if !containsFile(files, path.Join(path.Dir(f), "go.mod")) {
 				unread = append(unread, f)
 			}
-		case "pyproject.toml", "package.json":
-			lock := path.Join(path.Dir(f), map[string]string{"pyproject.toml": "uv.lock", "package.json": "package-lock.json"}[path.Base(f)])
+		case "pyproject.toml", "package.json", "Pipfile":
+			candidates := map[string][]string{
+				"pyproject.toml": {"uv.lock"},
+				"package.json":   {"package-lock.json", "yarn.lock"},
+				"Pipfile":        {"Pipfile.lock"},
+			}[path.Base(f)]
+
+			changed, exists := false, false
+
+			for _, name := range candidates {
+				lock := path.Join(path.Dir(f), name)
+				changed = changed || containsFile(files, lock)
+				exists = exists || Exists(filepath.Join(dir, filepath.FromSlash(lock)))
+			}
 
 			switch {
-			case containsFile(files, lock): // compared through the lock
-			case Exists(filepath.Join(dir, filepath.FromSlash(lock))):
+			case changed: // compared through the lock
+			case exists:
 				stale = append(stale, f)
 			default:
 				unread = append(unread, f)
@@ -316,6 +328,16 @@ func scanAt(gh *GitHub, api, dir, lock, sha string, scan Options) (*Report, erro
 	file := filepath.Join(tmp, path.Base(lock))
 	if err := os.WriteFile(file, body, 0o600); err != nil {
 		return nil, err
+	}
+
+	// A yarn.lock doesn't say which dependencies are runtime or dev: that's the package.json
+	// beside it, as it was at this commit.
+	if path.Base(lock) == "yarn.lock" {
+		if manifest, err := gh.raw(fmt.Sprintf("%s/contents/%s?ref=%s", api, path.Join(path.Dir(lock), "package.json"), sha)); err == nil {
+			if err := os.WriteFile(filepath.Join(tmp, "package.json"), manifest, 0o600); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	scan.LockFile = file

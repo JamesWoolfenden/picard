@@ -71,8 +71,7 @@ func PlanDependabot(gh *GitHub, opts DependabotOptions) ([]AlertDecision, error)
 
 		if lock == "" {
 			decisions = append(decisions, AlertDecision{
-				Alert: a, Action: ActionSkip,
-				Reason: "picard reads " + strings.Join(LockFiles, ", ") + "; this alert is on " + a.Dependency.ManifestPath,
+				Alert: a, Action: ActionSkip, Reason: skipReason(opts.Directory, a.Dependency.ManifestPath),
 			})
 
 			continue
@@ -126,9 +125,24 @@ func manifestOf(a Alert) string {
 func lockForManifest(root, manifest string) string {
 	dir := path.Dir(manifest)
 
-	switch path.Base(manifest) {
-	case "uv.lock", "package-lock.json", "go.mod":
+	switch base := path.Base(manifest); {
+	case base == "uv.lock", base == "package-lock.json", base == "go.mod", base == "Pipfile.lock", base == "yarn.lock":
 		return filepath.Join(root, filepath.FromSlash(manifest))
+	case IsRequirementsFile(base):
+		if file := filepath.Join(root, filepath.FromSlash(manifest)); Exists(file) {
+			return file
+		}
+
+		return ""
+	default:
+		return lockBesideManifest(root, dir, base)
+	}
+}
+
+// lockBesideManifest is the lock file kept next to a manifest, for the manifests alerts are
+// raised on that aren't themselves locks.
+func lockBesideManifest(root, dir, base string) string {
+	switch base {
 	case "go.sum":
 		if lock := filepath.Join(root, filepath.FromSlash(dir), "go.mod"); Exists(lock) {
 			return lock
@@ -137,13 +151,35 @@ func lockForManifest(root, manifest string) string {
 		if lock := filepath.Join(root, filepath.FromSlash(dir), "uv.lock"); Exists(lock) {
 			return lock
 		}
-	case "package.json":
-		if lock := filepath.Join(root, filepath.FromSlash(dir), "package-lock.json"); Exists(lock) {
+	case "Pipfile":
+		if lock := filepath.Join(root, filepath.FromSlash(dir), "Pipfile.lock"); Exists(lock) {
 			return lock
+		}
+	case "package.json":
+		for _, name := range []string{"package-lock.json", "yarn.lock"} {
+			if lock := filepath.Join(root, filepath.FromSlash(dir), name); Exists(lock) {
+				return lock
+			}
 		}
 	}
 
 	return ""
+}
+
+// skipReason says why an alert's manifest has no lock picard can read, and what would fix it.
+func skipReason(root, manifest string) string {
+	base := path.Base(manifest)
+
+	switch {
+	case base == "package.json":
+		return "no lock file beside " + manifest + " (package-lock.json or yarn.lock): run npm install or yarn install to create one, so there's a resolved tree to check"
+	case base == "Pipfile":
+		return "no Pipfile.lock beside " + manifest + ": run pipenv lock"
+	case IsRequirementsFile(base):
+		return manifest + " isn't in the checkout"
+	}
+
+	return "picard reads " + strings.Join(LockFiles, ", ") + "; this alert is on " + manifest
 }
 
 // decide maps the alert onto picard's verdict for the same advisory and package.
