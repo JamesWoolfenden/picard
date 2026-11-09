@@ -35,6 +35,46 @@ func TestMajorOf(t *testing.T) {
 	}
 }
 
+// Dependabot titles carry the repo's commit-message prefix, and digest bumps are not major.
+func TestPRTitleParsing(t *testing.T) {
+	for _, c := range []struct {
+		title, pkg, from, to string
+		major                bool
+	}{
+		{"Bump vitest from 1.0.0 to 2.0.0 in /ui", "vitest", "1.0.0", "2.0.0", true},
+		{"chore(deps): bump @sveltejs/kit from 2.70.4 to 3.1.1", "@sveltejs/kit", "2.70.4", "3.1.1", true},
+		{"build(deps): Bump aiohttp from 3.9.1 to 3.14.5", "aiohttp", "3.9.1", "3.14.5", false},
+		{"deps(deps)!: bump x from 1.2.0 to 1.3.0", "x", "1.2.0", "1.3.0", false},
+		{"docker(deps): bump golang from `d200d2d` to `fa3d596`", "golang", "`d200d2d`", "`fa3d596`", false},
+		{"Update requests requirement from >=2.3.0 to >=3.0.0", "requests", ">=2.3.0", ">=3.0.0", true},
+	} {
+		m := prTitleRe.FindStringSubmatch(c.title)
+		if m == nil {
+			t.Errorf("%q did not match", c.title)
+
+			continue
+		}
+
+		if m[1] != c.pkg || m[2] != c.from || m[3] != c.to {
+			t.Errorf("%q parsed as %v", c.title, m[1:])
+		}
+
+		if major := isVersion(m[2]) && isVersion(m[3]) && majorOf(m[2]) != majorOf(m[3]); major != c.major {
+			t.Errorf("%q major = %v, want %v", c.title, major, c.major)
+		}
+	}
+
+	// Grouped titles name no versions, so there is nothing to parse.
+	for _, title := range []string{
+		"deps(deps): bump the minor-and-patch group with 6 updates",
+		"build(deps): bump cookie, @sveltejs/adapter-auto and @sveltejs/kit",
+	} {
+		if prTitleRe.MatchString(title) {
+			t.Errorf("%q should not match", title)
+		}
+	}
+}
+
 // garmin-mcp-gt's PRs in miniature: a lock bump that removes an advisory, and a requirement
 // floor raised in an unpinned file.
 func TestTriagePRs(t *testing.T) {

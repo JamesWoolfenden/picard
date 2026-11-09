@@ -59,7 +59,10 @@ type PRTriage struct {
 	Adds    []PRAdvisory `json:"adds,omitempty"`
 }
 
-var prTitleRe = regexp.MustCompile(`^(?:Bump|Update) (\S+)(?: requirement)? from (\S+) to (\S+)`)
+// prTitleRe matches a single-package Dependabot title, with or without the commit-style
+// prefix its commit-message-prefix setting adds ("chore(deps): bump x from 1 to 2").
+// Grouped titles ("bump the minor-and-patch group", "bump a, b and c") carry no versions.
+var prTitleRe = regexp.MustCompile(`(?i)^(?:[\w-]+(?:\([^)]*\))?!?:\s*)?(?:bump|update) (\S+)(?: requirement)? from (\S+) to (\S+)`)
 
 // TriagePRs reads each Dependabot PR: which lock files it changes, and - scanning the lock
 // at the PR's base and head - which advisories it removes or adds.
@@ -76,7 +79,7 @@ func TriagePRs(gh *GitHub, repo, dir string, prs []PullRequest, scan Options) ([
 
 		if m := prTitleRe.FindStringSubmatch(pr.Title); m != nil {
 			t.Package, t.From, t.To = m[1], m[2], m[3]
-			t.Major = majorOf(t.From) != majorOf(t.To)
+			t.Major = isVersion(t.From) && isVersion(t.To) && majorOf(t.From) != majorOf(t.To)
 		}
 
 		var files []struct {
@@ -295,6 +298,14 @@ func describeRemoved(advs []PRAdvisory, shippedOnly bool) string {
 	}
 
 	return strings.Join(parts, ", ")
+}
+
+// isVersion reports whether v starts like a version number, so a digest bump (from `d200d2d`
+// to `fa3d596`) is not mistaken for a major one.
+func isVersion(v string) bool {
+	v = strings.TrimLeft(v, "=<>~^!v ")
+
+	return v != "" && v[0] >= '0' && v[0] <= '9'
 }
 
 // majorOf is a version's major component, ignoring requirement operators (>=1.13.0 -> 1).
