@@ -98,9 +98,13 @@ func main() {
 			},
 			{
 				Name:  "dependabot",
-				Usage: "checks a repository's Dependabot setup, proposes an action for each alert, and with --apply dismisses the ones that don't reach it",
+				Usage: "checks a repository's Dependabot and security settings, proposes an action for each alert, and with --apply dismisses the ones that don't reach it",
 				UsageText: "picard dependabot -d path/to/checkout [--repo owner/name] [--apply | --apply-judged]\n" +
 					"   alerts are matched to picard's verdicts by advisory id; dry run unless --apply\n" +
+					"   settings checked: Dependabot alerts / security updates / version updates, malware alerts\n" +
+					"   (reported unknown when the API doesn't say), secret scanning push protection and validity checks\n" +
+					"   open Scorecard code-scanning alerts (VulnerabilitiesID) are matched to the same verdicts;\n" +
+					"   --apply dismisses them with a code-scanning reason (false positive / won't fix)\n" +
 					"   on a GitLab project (origin, or --repo https://host/group/project) it checks dependency scanning's setup",
 				Flags: append([]cli.Flag{
 					&cli.StringFlag{Name: "directory", Aliases: []string{"d"}, Usage: "a checkout of the repository", Value: "."},
