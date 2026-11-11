@@ -151,6 +151,18 @@ func main() {
 						return err
 					}
 
+					// Scorecard's Vulnerabilities alerts are open code-scanning alerts; replaying past
+					// Dependabot states has nothing to say about them.
+					var scorecard *core.ScorecardPlan
+
+					if c.String("state") == "open" {
+						if scorecard, err = core.PlanScorecard(gh, core.DependabotOptions{
+							Repo: repo, Directory: opts.Directory, Scan: opts, LockFile: c.String("lock"),
+						}); err != nil {
+							return err
+						}
+					}
+
 					var prs []core.PRTriage
 					if c.Bool("prs") {
 						if prs, err = core.TriagePRs(gh, repo, opts.Directory, settings.PRs, opts); err != nil {
@@ -161,6 +173,12 @@ func main() {
 					var applyErr error
 					if c.Bool("apply") || c.Bool("apply-judged") {
 						applyErr = core.ApplyDecisions(gh, repo, decisions, c.Bool("apply-judged"))
+
+						if scorecard != nil {
+							if err := core.ApplyScorecard(gh, repo, scorecard, c.Bool("apply-judged")); err != nil && applyErr == nil {
+								applyErr = err
+							}
+						}
 					}
 
 					switch c.String("format") {
@@ -168,7 +186,7 @@ func main() {
 						enc := json.NewEncoder(os.Stdout)
 						enc.SetIndent("", "  ")
 
-						if err := enc.Encode(map[string]any{"settings": settings, "alerts": decisions, "pull_requests": prs}); err != nil {
+						if err := enc.Encode(map[string]any{"settings": settings, "alerts": decisions, "scorecard": scorecard, "pull_requests": prs}); err != nil {
 							return err
 						}
 					case "table":
@@ -176,6 +194,10 @@ func main() {
 
 						if err := core.WriteDecisions(os.Stdout, repo, decisions); err != nil {
 							return err
+						}
+
+						if scorecard != nil {
+							core.WriteScorecard(os.Stdout, repo, scorecard)
 						}
 
 						if c.Bool("prs") {

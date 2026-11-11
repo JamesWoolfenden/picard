@@ -194,6 +194,13 @@ func decide(a Alert, report *Report) AlertDecision {
 		return d
 	}
 
+	d.propose(adv)
+
+	return d
+}
+
+// propose sets the action for an advisory from picard's verdict on it.
+func (d *AlertDecision) propose(adv Advisory) {
 	d.Verdict, d.Reason = adv.Verdict, adv.Reason
 
 	switch adv.Verdict {
@@ -212,8 +219,6 @@ func decide(a Alert, report *Report) AlertDecision {
 		d.Action, d.DismissReason, d.Judged = ActionKeepOpen, "", false
 		d.Reason = "not dismissed: " + note + ". Picard's verdict: " + d.Reason
 	}
-
-	return d
 }
 
 // findAdvisory is picard's advisory for an alert. A package locked at several versions has a

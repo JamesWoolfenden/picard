@@ -35,6 +35,8 @@ Module path: `github.com/jameswoolfenden/picard`
 - `surface.go`, `surface_scan.go` - `picard surface`: what each direct dependency alone
   brings in (packages, native code, size, advisory history, use) and undeclared imports;
   `churn.go` - recent advisory events and the review rules (unused / little used for its cost)
+- `codescanning.go` - Scorecard "Vulnerabilities" code-scanning alerts related to verdicts, dismissed
+  through the code-scanning API
 - `settings.go`, `prs.go` - `picard dependabot`'s setup checks and `--prs` (each PR's locks
   scanned at base and head)
 - `gitlab.go`, `gitlabsettings.go` - GitLab (incl. self-managed) GraphQL client and remote

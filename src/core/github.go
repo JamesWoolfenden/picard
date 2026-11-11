@@ -80,7 +80,12 @@ func (g *GitHub) Alerts(repo, state string) ([]Alert, error) {
 		url += "&state=" + state
 	}
 
-	var all []Alert
+	return getAll[Alert](g, url)
+}
+
+// getAll GETs a list endpoint and follows its pagination.
+func getAll[T any](g *GitHub, url string) ([]T, error) {
+	var all []T
 
 	for url != "" {
 		resp, err := g.do(http.MethodGet, url, nil)
@@ -88,13 +93,13 @@ func (g *GitHub) Alerts(repo, state string) ([]Alert, error) {
 			return nil, err
 		}
 
-		var page []Alert
+		var page []T
 
 		err = json.NewDecoder(resp.Body).Decode(&page)
 		resp.Body.Close()
 
 		if err != nil {
-			return nil, fmt.Errorf("decoding alerts: %w", err)
+			return nil, fmt.Errorf("decoding %s: %w", url, err)
 		}
 
 		all = append(all, page...)
@@ -132,6 +137,17 @@ func (g *GitHub) Dismiss(repo string, number int, reason, comment string) error 
 	return nil
 }
 
+// HTTPError is a GitHub API response with an error status.
+type HTTPError struct {
+	Method, URL string
+	Status      int
+	Message     string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("%s %s: HTTP %d: %s", e.Method, e.URL, e.Status, e.Message)
+}
+
 func (g *GitHub) do(method, url string, body []byte) (*http.Response, error) {
 	req, err := http.NewRequest(method, url, bytes.NewReader(body))
 	if err != nil {
@@ -159,7 +175,7 @@ func (g *GitHub) do(method, url string, body []byte) (*http.Response, error) {
 		_ = json.NewDecoder(resp.Body).Decode(&msg)
 		resp.Body.Close()
 
-		return nil, fmt.Errorf("%s %s: HTTP %d: %s", method, url, resp.StatusCode, msg.Message)
+		return nil, &HTTPError{Method: method, URL: url, Status: resp.StatusCode, Message: msg.Message}
 	}
 
 	return resp, nil

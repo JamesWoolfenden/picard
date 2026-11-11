@@ -16,7 +16,9 @@ import (
 // SettingCheck is one finding about how a repository's Dependabot is set up.
 type SettingCheck struct {
 	// OK: nothing to do. Otherwise Problem says what's wrong and Fix how to fix it.
-	OK      bool   `json:"ok"`
+	OK bool `json:"ok"`
+	// Unknown: the API doesn't say, so picard can't tell. Not OK, but not a failure either.
+	Unknown bool   `json:"unknown,omitempty"`
 	Check   string `json:"check"`
 	Problem string `json:"problem,omitempty"`
 	Fix     string `json:"fix,omitempty"`
@@ -91,6 +93,8 @@ func CheckDependabotSettings(gh *GitHub, repo, dir string) (*DependabotSettings,
 		Fix:     "gh api -X PUT repos/" + repo + "/automated-security-fixes",
 	})
 
+	s.checkSecurityAndAnalysis(gh, api, repo)
+
 	if err := s.loadPRs(gh, api); err != nil {
 		return nil, err
 	}
@@ -98,6 +102,65 @@ func CheckDependabotSettings(gh *GitHub, repo, dir string) (*DependabotSettings,
 	s.checkVersionUpdates(dir)
 
 	return s, nil
+}
+
+// checkSecurityAndAnalysis reads the repository's security_and_analysis block: Malware alerts
+// (reported as unknown when the API doesn't expose it) and, when present and off, secret
+// scanning push protection and validity checks. A repository the token can't see the block
+// of (it needs admin access) gets unknown for malware alerts and nothing for the others.
+func (s *DependabotSettings) checkSecurityAndAnalysis(gh *GitHub, api, repo string) {
+	var r struct {
+		SecurityAndAnalysis map[string]struct {
+			Status string `json:"status"`
+		} `json:"security_and_analysis"`
+	}
+
+	// An error here (no access, or the endpoint is unavailable) just means we can't tell.
+	_ = gh.getJSON(api, &r)
+
+	malware := ""
+
+	for key := range r.SecurityAndAnalysis {
+		if strings.Contains(key, "malware") {
+			malware = key
+		}
+	}
+
+	if malware == "" {
+		s.add(SettingCheck{
+			Unknown: true, Check: "Malware alerts",
+			Problem: "the API doesn't say whether they're on (no malware field in security_and_analysis); " +
+				"the Dependabot page shows \"Malware alerts are disabled\" when off",
+			Fix: gitHubHost(gh) + "/" + repo + "/settings/security_analysis - enable Malware alerts if off",
+		})
+	} else {
+		s.add(SettingCheck{
+			OK: r.SecurityAndAnalysis[malware].Status == "enabled", Check: "Malware alerts",
+			Problem: "disabled - malicious packages in the lock go unreported",
+			Fix:     "enable Malware alerts at " + gitHubHost(gh) + "/" + repo + "/settings/security_analysis",
+		})
+	}
+
+	for _, c := range []struct{ key, check string }{
+		{"secret_scanning_push_protection", "Secret scanning push protection"},
+		{"secret_scanning_validity_checks", "Secret scanning validity checks"},
+	} {
+		if v, ok := r.SecurityAndAnalysis[c.key]; ok && v.Status != "enabled" {
+			s.add(SettingCheck{
+				Check: c.check, Problem: "disabled",
+				Fix: "gh api -X PATCH repos/" + repo + " -f security_and_analysis[" + c.key + "][status]=enabled",
+			})
+		}
+	}
+}
+
+// gitHubHost is the web address of the GitHub the client talks to.
+func gitHubHost(gh *GitHub) string {
+	if gh.BaseURL == DefaultGitHubURL {
+		return "https://github.com"
+	}
+
+	return strings.TrimSuffix(strings.TrimSuffix(gh.BaseURL, "/api/v3"), "/")
 }
 
 func (s *DependabotSettings) add(c SettingCheck) {
@@ -239,6 +302,14 @@ func writeChecks(w io.Writer, checks []SettingCheck) {
 	for _, c := range checks {
 		if c.OK {
 			fmt.Fprintf(w, "  ok    %s\n", c.Check)
+
+			continue
+		}
+
+		if c.Unknown {
+			fmt.Fprintf(w, "  ?     %s\n", c.Check)
+			fmt.Fprint(w, wrap(c.Problem, "        ", width))
+			fmt.Fprint(w, wrap("check: "+c.Fix, "        ", width))
 
 			continue
 		}

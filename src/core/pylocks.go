@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -72,6 +73,8 @@ func ReadPipfileLock(path string) (*Lock, error) {
 				lock.Packages[name] = &Package{Name: name, Version: version, Variants: []Variant{{Version: version}}}
 			}
 		}
+
+		sort.Strings(names) // map order would make the lock differ run to run
 
 		return mergeNames(nil, names)
 	}

@@ -71,8 +71,13 @@ updates:
 		t.Fatal(err)
 	}
 
-	want := map[string]bool{"Dependabot alerts": true, "Dependabot security updates": false, "Dependabot version updates": false}
+	// The repo endpoint isn't served here, so malware alerts can't be told: unknown, not ok.
+	want := map[string]bool{"Dependabot alerts": true, "Dependabot security updates": false, "Dependabot version updates": false, "Malware alerts": false}
 	for _, c := range s.Checks {
+		if c.Check == "Malware alerts" && !c.Unknown {
+			t.Errorf("malware alerts should be unknown: %+v", c)
+		}
+
 		if ok, known := want[c.Check]; !known || ok != c.OK {
 			t.Errorf("check %q ok=%v (%s)", c.Check, c.OK, c.Problem)
 		}
@@ -86,6 +91,74 @@ updates:
 	for _, c := range s.Checks {
 		if c.Check == "Dependabot version updates" && c.Problem[:10] != "on for pip" {
 			t.Errorf("problem = %q", c.Problem)
+		}
+	}
+}
+
+func TestCheckSecurityAndAnalysis(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		block   map[string]any
+		malware string // "ok", "fix" or "unknown"
+		extra   []string
+	}{
+		{"no malware field, push protection off", map[string]any{
+			"secret_scanning_push_protection": map[string]string{"status": "disabled"},
+			"secret_scanning_validity_checks": map[string]string{"status": "disabled"},
+			"dependabot_security_updates":     map[string]string{"status": "enabled"},
+		}, "unknown", []string{"Secret scanning push protection", "Secret scanning validity checks"}},
+		{"malware on", map[string]any{
+			"dependabot_malware_alerts":       map[string]string{"status": "enabled"},
+			"secret_scanning_push_protection": map[string]string{"status": "enabled"},
+		}, "ok", nil},
+		{"malware off", map[string]any{
+			"dependabot_malware_alerts": map[string]string{"status": "disabled"},
+		}, "fix", nil},
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/repos/o/r" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"security_and_analysis": tc.block})
+
+				return
+			}
+
+			http.NotFound(w, r)
+		}))
+
+		s := &DependabotSettings{}
+		s.checkSecurityAndAnalysis(&GitHub{BaseURL: server.URL, Client: server.Client()}, server.URL+"/repos/o/r", "o/r")
+		server.Close()
+
+		got := map[string]SettingCheck{}
+		for _, c := range s.Checks {
+			got[c.Check] = c
+		}
+
+		m := got["Malware alerts"]
+
+		switch tc.malware {
+		case "ok":
+			if !m.OK {
+				t.Errorf("%s: malware %+v, want ok", tc.name, m)
+			}
+		case "fix":
+			if m.OK || m.Unknown || m.Fix == "" {
+				t.Errorf("%s: malware %+v, want a fix", tc.name, m)
+			}
+		case "unknown":
+			if m.OK || !m.Unknown {
+				t.Errorf("%s: malware %+v, want unknown", tc.name, m)
+			}
+		}
+
+		if len(s.Checks) != 1+len(tc.extra) {
+			t.Errorf("%s: %d checks %+v, want malware plus %v", tc.name, len(s.Checks), s.Checks, tc.extra)
+		}
+
+		for _, name := range tc.extra {
+			if c, ok := got[name]; !ok || c.OK {
+				t.Errorf("%s: want a failing %q", tc.name, name)
+			}
 		}
 	}
 }
