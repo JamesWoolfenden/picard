@@ -100,8 +100,67 @@ func CheckDependabotSettings(gh *GitHub, repo, dir string) (*DependabotSettings,
 	}
 
 	s.checkVersionUpdates(dir)
+	s.checkConfigPresent(gh, api)
 
 	return s, nil
+}
+
+// checkConfigPresent flags a repository with no .github/dependabot.yml. It asks GitHub rather
+// than the checkout, so it gives the same answer when picard is pointed at a bare directory.
+// A file whose entries all have open-pull-requests-limit: 0 is the intended setup: Dependabot
+// is configured but only security updates open PRs.
+func (s *DependabotSettings) checkConfigPresent(gh *GitHub, api string) {
+	found := false
+
+	for _, name := range []string{"dependabot.yml", "dependabot.yaml"} {
+		code, err := gh.exists(api + "/contents/.github/" + name)
+		if err != nil {
+			s.add(SettingCheck{
+				Check: "Dependabot config", Unknown: true,
+				Problem: "couldn't tell whether .github/dependabot.yml exists: " + err.Error(),
+			})
+
+			return
+		}
+
+		if code == http.StatusOK {
+			found = true
+
+			break
+		}
+	}
+
+	s.add(SettingCheck{
+		OK: found, Check: "Dependabot config",
+		Problem: "no .github/dependabot.yml",
+		Fix: "add .github/dependabot.yml with an entry per ecosystem and open-pull-requests-limit: 0, " +
+			"so only security updates open PRs",
+	})
+}
+
+// exists reports whether a GET returns 200 (found) or 404 (not found); anything else is an error.
+func (g *GitHub) exists(url string) (int, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("Authorization", "Bearer "+g.Token)
+
+	resp, err := g.Client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("GET %s: %w", url, err)
+	}
+
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		return resp.StatusCode, fmt.Errorf("GET %s: HTTP %d", url, resp.StatusCode)
+	}
+
+	return resp.StatusCode, nil
 }
 
 // checkSecurityAndAnalysis reads the repository's security_and_analysis block: Malware alerts

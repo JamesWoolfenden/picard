@@ -46,6 +46,8 @@ func TestCheckDependabotSettings(t *testing.T) {
 			_ = json.NewEncoder(w).Encode([]map[string]any{
 				{"number": 10, "dependency": map[string]any{"package": map[string]string{"name": "uuid"}}},
 			})
+		case "/repos/o/r/contents/.github/dependabot.yml":
+			_ = json.NewEncoder(w).Encode(map[string]string{"name": "dependabot.yml"})
 		default:
 			http.NotFound(w, r)
 		}
@@ -72,7 +74,7 @@ updates:
 	}
 
 	// The repo endpoint isn't served here, so malware alerts can't be told: unknown, not ok.
-	want := map[string]bool{"Dependabot alerts": true, "Dependabot security updates": false, "Dependabot version updates": false, "Malware alerts": false}
+	want := map[string]bool{"Dependabot alerts": true, "Dependabot security updates": false, "Dependabot version updates": false, "Malware alerts": false, "Dependabot config": true}
 	for _, c := range s.Checks {
 		if c.Check == "Malware alerts" && !c.Unknown {
 			t.Errorf("malware alerts should be unknown: %+v", c)
@@ -160,5 +162,50 @@ func TestCheckSecurityAndAnalysis(t *testing.T) {
 				t.Errorf("%s: want a failing %q", tc.name, name)
 			}
 		}
+	}
+}
+
+// The file is looked up on GitHub, not in the directory picard is pointed at, so a bare -d
+// directory doesn't flag every repository.
+func TestCheckConfigPresent(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		paths       map[string]int // path -> status; anything else 404
+		wantOK      bool
+		wantUnknown bool
+	}{
+		{"yml", map[string]int{"/repos/o/r/contents/.github/dependabot.yml": 200}, true, false},
+		{"yaml", map[string]int{"/repos/o/r/contents/.github/dependabot.yaml": 200}, true, false},
+		{"missing", map[string]int{}, false, false},
+		{"forbidden", map[string]int{"/repos/o/r/contents/.github/dependabot.yml": 403}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if code, ok := tc.paths[r.URL.Path]; ok {
+					w.WriteHeader(code)
+
+					return
+				}
+
+				http.NotFound(w, r)
+			}))
+			defer server.Close()
+
+			s := &DependabotSettings{}
+			s.checkConfigPresent(&GitHub{BaseURL: server.URL, Client: server.Client()}, server.URL+"/repos/o/r")
+
+			if len(s.Checks) != 1 {
+				t.Fatalf("checks = %+v", s.Checks)
+			}
+
+			c := s.Checks[0]
+			if c.Check != "Dependabot config" || c.OK != tc.wantOK || c.Unknown != tc.wantUnknown {
+				t.Errorf("check = %+v", c)
+			}
+
+			if !tc.wantOK && !tc.wantUnknown && c.Fix == "" {
+				t.Error("a missing file should come with a fix")
+			}
+		})
 	}
 }
