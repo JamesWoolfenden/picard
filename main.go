@@ -219,6 +219,52 @@ func main() {
 				},
 			},
 			{
+				Name:  "reports",
+				Usage: "ranks a repository's private vulnerability reports (security advisories in triage) by the facts picard can gather",
+				UsageText: "picard reports -d path/to/checkout [--repo owner/name] [--format table|json]\n" +
+					"   read-only; the report text is parsed for file and function names, never followed or run\n" +
+					"   needs admin or security manager access and a token with advisory read scope",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "directory", Aliases: []string{"d"}, Usage: "a checkout of the repository (what a report names is checked against it)", Value: "."},
+					&cli.StringFlag{Name: "repo", Usage: "GitHub owner/name (default: the checkout's origin remote)"},
+					&cli.StringFlag{Name: "format", Aliases: []string{"f"}, Usage: "output format: table or json", Value: "table"},
+				},
+				Action: func(c *cli.Context) error {
+					remote, err := dependabotRemote(c)
+					if err != nil {
+						return err
+					}
+
+					if !remote.GitHub() {
+						return fmt.Errorf("picard reports reads GitHub security advisories; %s is not GitHub", remote.Host)
+					}
+
+					gh, err := core.NewGitHub()
+					if err != nil {
+						return err
+					}
+
+					reports, err := core.GatherReports(gh, core.ReportsOptions{Repo: remote.Path, Directory: c.String("directory")})
+					if err != nil {
+						return err
+					}
+
+					switch c.String("format") {
+					case "json":
+						enc := json.NewEncoder(os.Stdout)
+						enc.SetIndent("", "  ")
+
+						return enc.Encode(map[string]any{"reports": reports})
+					case "table":
+						core.WriteReports(os.Stdout, remote.Path, reports)
+
+						return nil
+					default:
+						return fmt.Errorf("unknown format %q (table or json)", c.String("format"))
+					}
+				},
+			},
+			{
 				Name:      "surface",
 				Aliases:   []string{"f"},
 				Usage:     "ranks direct dependencies by what each alone brings into the production install",

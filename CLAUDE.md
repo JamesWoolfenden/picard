@@ -41,6 +41,9 @@ Module path: `github.com/jameswoolfenden/picard`
   scanned at base and head)
 - `gitlab.go`, `gitlabsettings.go` - GitLab (incl. self-managed) GraphQL client and remote
   parsing; on a GitLab origin `picard dependabot` runs the dependency scanning setup check only
+- `reports.go` - `picard reports`: private vulnerability reports (advisories in `triage`) with
+  gathered facts (reporter, what the report names vs the checkout, shape, overlap, age) and an
+  urgency-ordered queue; read-only, report text is matched never followed
 - `scan.go` - wires it together
 
 `skills/picard-triage` is the judgement layer on top (a Claude Code skill): picard stays
