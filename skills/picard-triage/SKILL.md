@@ -234,6 +234,11 @@ Same as a `keep-open` alert: the fixing PR, or the upgrade.
 For each failing check, its fix. Version updates off means editing
 `.github/dependabot.yml` (`open-pull-requests-limit: 0` per entry) - a commit to the repo.
 
+**Dependabot config** fails when the repo has no `.github/dependabot.yml` (looked up on GitHub, so
+it's right even for a bare `-d`). The fix is a file with an entry per ecosystem and
+`open-pull-requests-limit: 0`, so only security updates open PRs - that is also what the
+"Dependabot version updates" check wants.
+
 The checks also cover **Malware alerts** and, when off, secret scanning push protection and
 validity checks. A `?` (`"unknown": true`) means the API doesn't say - GitHub doesn't expose
 the malware setting on every repo - so tell the user you can't tell and point them at
