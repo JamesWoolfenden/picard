@@ -147,6 +147,13 @@ about). Each problem comes with the command or config change that fixes it, and 
 Dependabot PRs are labelled security fix or version bump. Pinning is
 [ghat](https://github.com/JamesWoolfenden/ghat)'s job, so it isn't checked here.
 
+Two checks say whether the alerts can be trusted at all. **Dependabot runs** reads Dependabot's
+own workflow runs (`event=dynamic`) and flags a failed one, since a failed update or graph run
+means missing alerts or PRs. **Dependency graph** flags a lock or manifest committed after the
+graph last updated successfully: alerts are matched against the graph, so they may not reflect
+the current lock. If no runs are visible, both show `?` - Dependabot may be on legacy runners,
+so check Insights > Dependency graph > Dependabot - rather than claiming it never ran.
+
 On a GitLab project - gitlab.com or self-managed, from the origin remote or
 `--repo https://host/group/project` - `picard dependabot` checks the GitLab equivalent instead:
 whether dependency scanning is licensed on the instance (it needs Ultimate) and ran in the
@@ -223,6 +230,32 @@ a plan, and carries out each merge, close, dismissal or setting change on your c
 For surface, the [`picard-surface`](skills/README.md) skill (`/picard-surface`) takes the
 dependencies `picard surface` flags, judges whether each can really go and what to use
 instead, and records every decision - including "leave it" - in `picard.yaml`.
+
+## Reports: private vulnerability reports
+
+Alerts and PRs cover a repository's *dependencies*; reports against its own code arrive as
+repository security advisories in state `triage`. When they pile up, `picard reports` ranks
+them without trusting the reporter or running anything they sent:
+
+```shell
+picard reports -d path/to/checkout [--repo owner/name] [--format table|json]
+```
+
+For each report it gathers the reporter's account age and public repos and their earlier
+advisories on this repository (published, closed, open); which files and functions the report
+names that exist in the checkout; its shape (reproduction steps, external links, attachments,
+a patch, a deadline or payment ask); overlap with other advisories and open Dependabot alerts;
+and how long it has waited. The queue is ordered by an urgency score. The score says how soon
+to look, not whether the report is real - the reproduction decides that.
+
+Strictly read-only, and the report text is only matched against patterns, never followed. Two
+limits: names are checked against the checkout as it is, **not** the affected versions, and
+only a single repository is supported (no owner-wide mode yet). It needs admin or security
+manager access and a token with the `repo` scope (classic) or "Repository security advisories:
+read" (fine-grained); a 404 is usually a scope problem and the error says so.
+
+The `picard-triage` skill (section h2) uses this output to bucket each report (likely real /
+needs a repro / duplicate / doesn't match the code) and draft a reply, sent only on your say.
 
 ## Surface: what each dependency costs
 
