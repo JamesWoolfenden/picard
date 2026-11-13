@@ -74,8 +74,12 @@ updates:
 	}
 
 	// The repo endpoint isn't served here, so malware alerts can't be told: unknown, not ok.
-	want := map[string]bool{"Dependabot alerts": true, "Dependabot security updates": false, "Dependabot version updates": false, "Malware alerts": false, "Dependabot config": true}
+	want := map[string]bool{"Dependabot alerts": true, "Dependabot security updates": false, "Dependabot version updates": false, "Malware alerts": false, "Dependabot config": true, "Dependabot runs": false}
 	for _, c := range s.Checks {
+		if c.Check == "Dependabot runs" && !c.Unknown {
+			t.Errorf("runs endpoint isn't served, so runs should be unknown: %+v", c)
+		}
+
 		if c.Check == "Malware alerts" && !c.Unknown {
 			t.Errorf("malware alerts should be unknown: %+v", c)
 		}
@@ -205,6 +209,72 @@ func TestCheckConfigPresent(t *testing.T) {
 
 			if !tc.wantOK && !tc.wantUnknown && c.Fix == "" {
 				t.Error("a missing file should come with a fix")
+			}
+		})
+	}
+}
+
+func TestCheckRuns(t *testing.T) {
+	run := func(name, conclusion, created string) map[string]any {
+		return map[string]any{"name": name, "conclusion": conclusion, "status": "completed", "created_at": created}
+	}
+
+	for _, tc := range []struct {
+		name    string
+		runs    []map[string]any
+		lockAt  string // last commit touching uv.lock
+		wantRun string // "ok", "fail" or "unknown"
+		wantGr  string // "", "ok" or "stale"
+	}{
+		{"no runs", nil, "2026-11-01T00:00:00Z", "unknown", ""},
+		{"failed version update", []map[string]any{
+			run("Dependabot Updates", "failure", "2026-11-10T00:00:00Z"),
+			run("Graph Update: uv in /", "success", "2026-11-10T00:00:00Z"),
+		}, "2026-11-01T00:00:00Z", "fail", "ok"},
+		{"stale graph", []map[string]any{
+			run("Graph Update: uv in /", "success", "2026-11-01T00:00:00Z"),
+		}, "2026-11-05T00:00:00Z", "ok", "stale"},
+		{"fresh graph", []map[string]any{
+			run("Graph Update: uv in /", "success", "2026-11-06T00:00:00Z"),
+		}, "2026-11-05T00:00:00Z", "ok", "ok"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/repos/o/r/actions/runs":
+					_ = json.NewEncoder(w).Encode(map[string]any{"workflow_runs": tc.runs})
+				case "/repos/o/r/commits":
+					_ = json.NewEncoder(w).Encode([]map[string]any{
+						{"commit": map[string]any{"committer": map[string]string{"date": tc.lockAt}}},
+					})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			dir := t.TempDir()
+			writeFiles(t, dir, map[string]string{"uv.lock": ""})
+
+			s := &DependabotSettings{}
+			s.checkRuns(&GitHub{BaseURL: server.URL, Client: server.Client()}, server.URL+"/repos/o/r", dir)
+
+			got, graph := "", ""
+
+			for _, c := range s.Checks {
+				switch c.Check {
+				case "Dependabot runs":
+					got = map[bool]string{true: "ok", false: "fail"}[c.OK]
+					if c.Unknown {
+						got = "unknown"
+					}
+				case "Dependency graph":
+					graph = map[bool]string{true: "ok", false: "stale"}[c.OK]
+				}
+			}
+
+			if got != tc.wantRun || graph != tc.wantGr {
+				t.Errorf("runs=%q graph=%q, want %q %q: %+v", got, graph, tc.wantRun, tc.wantGr, s.Checks)
 			}
 		})
 	}

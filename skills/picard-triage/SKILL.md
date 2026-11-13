@@ -239,6 +239,12 @@ it's right even for a bare `-d`). The fix is a file with an entry per ecosystem 
 `open-pull-requests-limit: 0`, so only security updates open PRs - that is also what the
 "Dependabot version updates" check wants.
 
+**Dependabot runs** and **Dependency graph** read Dependabot's own workflow runs. A failed run
+means missing alerts or PRs (re-run it from the Actions tab); a stale graph means a lock changed
+after the graph last updated, so the alerts may not reflect it - say so before trusting "no
+alerts". `?` there means no runs are visible (Dependabot may be on legacy runners), not that it
+never ran: point at Insights > Dependency graph > Dependabot.
+
 The checks also cover **Malware alerts** and, when off, secret scanning push protection and
 validity checks. A `?` (`"unknown": true`) means the API doesn't say - GitHub doesn't expose
 the malware setting on every repo - so tell the user you can't tell and point them at

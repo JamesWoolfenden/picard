@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -101,8 +102,136 @@ func CheckDependabotSettings(gh *GitHub, repo, dir string) (*DependabotSettings,
 
 	s.checkVersionUpdates(dir)
 	s.checkConfigPresent(gh, api)
+	s.checkRuns(gh, api, dir)
 
 	return s, nil
+}
+
+// dependabotRun is one of Dependabot's own workflow runs (event=dynamic).
+type dependabotRun struct {
+	Name       string    `json:"name"`
+	CreatedAt  time.Time `json:"created_at"`
+	Status     string    `json:"status"`
+	Conclusion string    `json:"conclusion"`
+}
+
+// lockFiles are the manifests and locks whose last commit is compared with the dependency
+// graph's last update.
+var lockFiles = []string{
+	"uv.lock", "poetry.lock", "requirements.txt", "package-lock.json", "yarn.lock", "go.mod",
+}
+
+// checkRuns reads Dependabot's recent runs (they appear as workflow runs with event=dynamic when
+// it uses Actions runners) and flags a failed run, and a dependency graph older than the lock.
+// No runs is reported as unknown, never as "never ran": legacy runners don't show up here.
+func (s *DependabotSettings) checkRuns(gh *GitHub, api, dir string) {
+	var r struct {
+		WorkflowRuns []dependabotRun `json:"workflow_runs"`
+	}
+
+	if err := gh.getJSON(api+"/actions/runs?event=dynamic&per_page=50", &r); err != nil {
+		s.add(SettingCheck{
+			Check: "Dependabot runs", Unknown: true,
+			Problem: "couldn't read Dependabot's runs: " + err.Error(),
+		})
+
+		return
+	}
+
+	if len(r.WorkflowRuns) == 0 {
+		s.add(SettingCheck{
+			Check: "Dependabot runs", Unknown: true,
+			Problem: "no runs visible - Dependabot may be on legacy runners; " +
+				"see Insights > Dependency graph > Dependabot for when it last checked",
+		})
+
+		return
+	}
+
+	// The newest run of each kind, and the newest successful graph update.
+	latest := map[string]dependabotRun{}
+
+	var graphOK time.Time
+
+	for _, run := range r.WorkflowRuns {
+		kind := dependabotRunKind(run.Name)
+		if cur, ok := latest[kind]; !ok || run.CreatedAt.After(cur.CreatedAt) {
+			latest[kind] = run
+		}
+
+		if kind == "graph update" && run.Conclusion == "success" && run.CreatedAt.After(graphOK) {
+			graphOK = run.CreatedAt
+		}
+	}
+
+	var failed []string
+
+	for _, kind := range []string{"version update", "security update", "graph update"} {
+		if run, ok := latest[kind]; ok && run.Conclusion != "" && run.Conclusion != "success" {
+			failed = append(failed, fmt.Sprintf("%s %s (%s)", kind, run.Conclusion, run.CreatedAt.Format("2006-01-02")))
+		}
+	}
+
+	s.add(SettingCheck{
+		OK: len(failed) == 0, Check: "Dependabot runs",
+		Problem: "last run failed: " + strings.Join(failed, "; ") + " - alerts or PRs may be missing",
+		Fix:     "re-run it from the repository's Actions tab, then check Insights > Dependency graph > Dependabot",
+	})
+
+	s.checkGraphFresh(gh, api, dir, graphOK)
+}
+
+// dependabotRunKind classifies a run by its workflow name.
+func dependabotRunKind(name string) string {
+	switch {
+	case strings.HasPrefix(name, "Graph Update"):
+		return "graph update"
+	case name == "Dependabot Updates":
+		return "version update"
+	default:
+		return "security update"
+	}
+}
+
+// checkGraphFresh flags a lock or manifest committed to the default branch after the dependency
+// graph last updated successfully: alerts are matched against the graph, so they may be stale.
+func (s *DependabotSettings) checkGraphFresh(gh *GitHub, api, dir string, graphOK time.Time) {
+	if graphOK.IsZero() {
+		return
+	}
+
+	var changed time.Time
+
+	changedFile := ""
+
+	for _, name := range lockFiles {
+		if !Exists(filepath.Join(dir, name)) {
+			continue
+		}
+
+		var commits []struct {
+			Commit struct {
+				Committer struct {
+					Date time.Time `json:"date"`
+				} `json:"committer"`
+			} `json:"commit"`
+		}
+
+		if err := gh.getJSON(api+"/commits?per_page=1&path="+name, &commits); err != nil || len(commits) == 0 {
+			continue
+		}
+
+		if d := commits[0].Commit.Committer.Date; d.After(changed) {
+			changed, changedFile = d, name
+		}
+	}
+
+	s.add(SettingCheck{
+		OK: changedFile == "" || !changed.After(graphOK), Check: "Dependency graph",
+		Problem: fmt.Sprintf("%s changed %s, after the graph last updated (%s) - alerts may not reflect the current lock",
+			changedFile, changed.Format("2006-01-02 15:04"), graphOK.Format("2006-01-02 15:04")),
+		Fix: "wait for the next graph update, or re-run \"Graph Update\" from the Actions tab",
+	})
 }
 
 // checkConfigPresent flags a repository with no .github/dependabot.yml. It asks GitHub rather
