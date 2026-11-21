@@ -117,6 +117,7 @@ func TestDecideTreatsGovulncheckAsFact(t *testing.T) {
 	}{
 		{"complete call graph", &GoReach{Level: GoReachImported}, false},
 		{"cgo unseen", &GoReach{Level: GoReachImported, WithoutCgo: []string{"linux/amd64"}}, true},
+		{"platform unloaded", &GoReach{Level: GoReachImported, Unloaded: []string{"linux/amd64"}}, true},
 		{"coverage run", nil, true},
 	} {
 		alert := Alert{}

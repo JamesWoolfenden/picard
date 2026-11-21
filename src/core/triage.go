@@ -362,7 +362,17 @@ func withoutCgo(r *GoReach) string {
 		return ""
 	}
 
-	return "; cgo files unseen on " + strings.Join(r.WithoutCgo, ", ") + " - no C compiler for them"
+	var notes []string
+
+	if len(r.WithoutCgo) > 0 {
+		notes = append(notes, "cgo files unseen on "+strings.Join(r.WithoutCgo, ", ")+" - no working C toolchain for them")
+	}
+
+	if len(r.Unloaded) > 0 {
+		notes = append(notes, "not analysed on "+strings.Join(r.Unloaded, ", "))
+	}
+
+	return "; " + strings.Join(notes, "; ")
 }
 
 func firstNonEmptyList(lists ...[]string) []string {

@@ -43,16 +43,20 @@ type GoReach struct {
 	// type-checked (no C compiler for them) - code only those files reach went unseen, so a
 	// "nothing calls it" resting on them isn't quite a fact.
 	WithoutCgo []string `json:"without_cgo,omitempty"`
+	// Unloaded are platforms govulncheck couldn't analyse even with cgo off; their results are
+	// missing, so a "nothing calls it" isn't a fact either.
+	Unloaded []string `json:"unloaded,omitempty"`
 }
 
 // Fact: govulncheck saw every platform whole, so its call graph settles the question.
-func (r *GoReach) Fact() bool { return len(r.WithoutCgo) == 0 }
+func (r *GoReach) Fact() bool { return len(r.WithoutCgo) == 0 && len(r.Unloaded) == 0 }
 
 // goVulnCheck runs govulncheck (in process, at symbol level) on the module in dir for each
 // of goPlatforms, with the standard library at goVersion, and returns the deepest finding per
-// Go vulnerability id. A cgo platform whose C files can't be type-checked is analysed with cgo
-// off (and the findings say so); any other failure fails the lot, since a missing platform
-// could hide a call. A variable so tests can stand in for it.
+// Go vulnerability id. A cgo platform that fails to load (no C compiler for it, a host
+// toolchain that can't assemble its runtime/cgo) is analysed with cgo off, and the findings
+// say so; a platform that fails even then is left out, and the findings say that too. Only
+// when no platform loads does the run fail. A variable so tests can stand in for it.
 var goVulnCheck = func(dir, goVersion string) (map[string]*GoReach, error) {
 	type result struct {
 		reach map[string]*GoReach
@@ -80,7 +84,7 @@ var goVulnCheck = func(dir, goVersion string) (map[string]*GoReach, error) {
 			platform := p[0] + "/" + p[1]
 
 			r.reach, r.err = runGovulncheck(dir, goVersion, p[0], p[1], p[2], platform)
-			if r.err != nil && p[2] == "1" && strings.Contains(r.err.Error(), "C compiler") {
+			if r.err != nil && p[2] == "1" {
 				r.noCgo = true
 				r.reach, r.err = runGovulncheck(dir, goVersion, p[0], p[1], "0", platform)
 			}
@@ -92,11 +96,19 @@ var goVulnCheck = func(dir, goVersion string) (map[string]*GoReach, error) {
 	var (
 		combined = map[string]*GoReach{}
 		noCgo    []string
+		unloaded []string
+		firstErr error
 	)
 
 	for i, r := range results {
 		if r.err != nil {
-			return nil, fmt.Errorf("govulncheck (%s/%s cgo=%s): %w", goPlatforms[i][0], goPlatforms[i][1], goPlatforms[i][2], r.err)
+			unloaded = append(unloaded, goPlatforms[i][0]+"/"+goPlatforms[i][1])
+
+			if firstErr == nil {
+				firstErr = fmt.Errorf("govulncheck (%s/%s cgo=%s): %w", goPlatforms[i][0], goPlatforms[i][1], goPlatforms[i][2], r.err)
+			}
+
+			continue
 		}
 
 		if r.noCgo {
@@ -110,10 +122,14 @@ var goVulnCheck = func(dir, goVersion string) (map[string]*GoReach, error) {
 		}
 	}
 
+	if len(unloaded) == len(results) {
+		return nil, firstErr
+	}
+
 	// A call found is found wherever; only "not called" depends on having seen everything.
 	for _, reach := range combined {
 		if reach.Level != GoReachCalled {
-			reach.WithoutCgo = noCgo
+			reach.WithoutCgo, reach.Unloaded = noCgo, unloaded
 		}
 	}
 
