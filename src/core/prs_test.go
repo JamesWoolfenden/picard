@@ -207,3 +207,76 @@ func TestTriagePRs(t *testing.T) {
 		t.Errorf("floor = %+v", floor)
 	}
 }
+
+// Docker base-image PRs change no lock: a golang builder bump is judged by the standard
+// library advisories fixed between the two Go versions, any other image is classed base-image.
+func TestTriageDockerPRs(t *testing.T) {
+	osv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/querybatch":
+			var body struct {
+				Queries []osvQuery `json:"queries"`
+			}
+
+			_ = json.NewDecoder(r.Body).Decode(&body)
+
+			results := make([]any, len(body.Queries))
+			for i, q := range body.Queries {
+				results[i] = map[string]any{}
+				// The standard library has an advisory in 1.27.3 that 1.27.4 fixes.
+				if q.Package.Name == GoStdlib && q.Version == "1.27.3" {
+					results[i] = map[string]any{"vulns": []any{map[string]string{"id": "GO-2026-1"}}}
+				}
+			}
+
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+		case "/v1/vulns/GO-2026-1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "GO-2026-1", "summary": "net/http: something"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer osv.Close()
+
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/files") {
+			_ = json.NewEncoder(w).Encode([]map[string]string{{"filename": "Dockerfile"}})
+
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": []map[string]string{{"status": "completed", "conclusion": "success"}}})
+	}))
+	defer gh.Close()
+
+	pr := func(n int, title string) PullRequest {
+		p := PullRequest{Number: n, Title: title}
+		p.Head.SHA, p.Base.SHA = "head", "base"
+
+		return p
+	}
+
+	got, err := TriagePRs(&GitHub{BaseURL: gh.URL, Client: gh.Client()}, "o/r", t.TempDir(), []PullRequest{
+		pr(1, "docker(deps): bump golang from 1.27.3-alpine3.24 to 1.27.4-alpine3.24"),
+		pr(2, "docker(deps): bump golang from 1.27.4-alpine3.24 to 1.27.5-alpine3.24"),
+		pr(3, "docker(deps): bump alpine from be26560 to f59abe6"),
+		pr(4, "docker(deps): bump node from 22-alpine to 24-alpine"),
+	}, Options{OSV: &OSV{BaseURL: osv.URL, Client: osv.Client()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i, want := range []string{PRFixesShipped, PRFixesNothing, PRBaseImage, PRBaseImage} {
+		if got[i].Class != want {
+			t.Errorf("PR %d class = %s (%s), want %s", got[i].Number, got[i].Class, got[i].Reason, want)
+		}
+	}
+
+	if len(got[0].Removes) != 1 || got[0].Removes[0].ID != "GO-2026-1" {
+		t.Errorf("golang bump removes = %+v", got[0].Removes)
+	}
+
+	if !strings.Contains(got[2].Reason, "digest") {
+		t.Errorf("digest bump reason = %q", got[2].Reason)
+	}
+}

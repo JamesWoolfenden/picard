@@ -177,6 +177,7 @@ PR isn't mistaken for a safe one:
 | `adds-advisory` | the new versions have advisories the old ones didn't |
 | `fixes-nothing` | a routine bump |
 | `no-install-change` | can't change what's installed: a `>=` floor raised in an unpinned requirements file, or a manifest whose lock the PR leaves alone |
+| `base-image` | only Dockerfiles change: a base image tag or digest. picard has no advisory data for an image's OS packages; a `golang` builder bump is instead classed by the Go standard library advisories fixed between the two versions |
 | `unknown` | changes files picard can't compare |
 
 ```text

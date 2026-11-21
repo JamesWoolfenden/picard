@@ -23,7 +23,11 @@ const (
 	// raised in an unpinned requirements file (resolution already picks the newest), or a
 	// manifest whose lock the PR leaves as it was.
 	PRNoInstallChange = "no-install-change"
-	PRUnknown         = "unknown" // changes nothing picard can read
+	// PRBaseImage: only Dockerfiles change - a base image tag or digest. What it brings in is
+	// the image's OS packages, which picard has no advisory data for (the Go standard library
+	// of a golang builder image is the exception, and is classed like a dependency).
+	PRBaseImage = "base-image"
+	PRUnknown   = "unknown" // changes nothing picard can read
 )
 
 // PRAdvisory is an advisory a PR removes or adds, with its verdict in the version that
@@ -128,6 +132,8 @@ func (t *PRTriage) compare(gh *GitHub, api, dir string, pr PullRequest, scan Opt
 			t.Class = PRNoInstallChange
 			t.Reason = "raises a >= floor in " + strings.Join(unread, ", ") +
 				", which isn't pinned: builds already install the newest, so nothing installed changes"
+		case len(stale) == 0 && dockerfilesOnly(unread):
+			t.dockerImage(scan)
 		default:
 			t.Class = PRUnknown
 			t.Reason = "changes " + strings.Join(append(unread, stale...), ", ") + " - no lock file picard can compare"
@@ -193,6 +199,119 @@ func (t *PRTriage) compare(gh *GitHub, api, dir string, pr PullRequest, scan Opt
 	}
 
 	return nil
+}
+
+// dockerfilesOnly: every file is a Dockerfile or Containerfile (Dockerfile.prod, app.dockerfile).
+func dockerfilesOnly(files []string) bool {
+	for _, f := range files {
+		b := strings.ToLower(path.Base(f))
+		if !strings.HasPrefix(b, "dockerfile") && !strings.HasPrefix(b, "containerfile") && !strings.HasSuffix(b, ".dockerfile") {
+			return false
+		}
+	}
+
+	return len(files) > 0
+}
+
+// dockerImage classifies a PR that only changes Dockerfiles. A golang image carries the Go
+// standard library into whatever it builds, so the advisories fixed between its two Go
+// versions are looked up like any dependency's; any other image is classed base-image, with
+// a reason that says what picard couldn't check.
+func (t *PRTriage) dockerImage(scan Options) {
+	files := strings.Join(t.Files, ", ")
+	t.Class = PRBaseImage
+
+	if t.Package == "golang" {
+		from, to := goImageVersion(t.From), goImageVersion(t.To)
+		if from != "" && to != "" && from != to {
+			if t.goImageAdvisories(scan, from, to) {
+				return
+			}
+		}
+	}
+
+	switch {
+	case strings.Contains(t.From, ".") || strings.Contains(t.To, "."):
+		t.Reason = fmt.Sprintf("bumps the %s base image tag (%s → %s) in %s; picard has no advisory data for the image's OS packages", t.Package, t.From, t.To, files)
+	case t.Package != "":
+		t.Reason = fmt.Sprintf("bumps the %s base image digest in %s; the tag is unchanged, so this picks up rebuilt OS packages - picard has no advisory data for them", t.Package, files)
+	default:
+		t.Reason = "changes " + files + " - a base image picard has no advisory data for"
+	}
+}
+
+// goImageVersion is the Go version in a golang image tag ("1.27.3-alpine3.24" -> "1.27.3"),
+// or "" when the tag isn't one.
+func goImageVersion(tag string) string {
+	v, _, _ := strings.Cut(tag, "-")
+	if !isVersion(v) || strings.Count(v, ".") != 2 {
+		return ""
+	}
+
+	return v
+}
+
+// goImageAdvisories compares the standard library's advisories at two Go versions and sets
+// the PR's class from them; false when OSV couldn't be asked.
+func (t *PRTriage) goImageAdvisories(scan Options, from, to string) bool {
+	osv := scan.OSV
+	if osv == nil {
+		osv = NewOSV()
+	}
+
+	at := func(version string) ([]Advisory, error) {
+		std := &Package{Name: GoStdlib, Version: version, Variants: []Variant{{Version: version}}}
+		found, err := osv.Query(EcosystemGo, []*Package{std})
+
+		return found[GoStdlib], err
+	}
+
+	was, err1 := at(from)
+	now, err2 := at(to)
+
+	if err1 != nil || err2 != nil {
+		return false
+	}
+
+	diff := func(a, b []Advisory) []PRAdvisory {
+		have := map[string]bool{}
+		for _, adv := range b {
+			have[adv.ID] = true
+		}
+
+		var out []PRAdvisory
+
+		for _, adv := range a {
+			if !have[adv.ID] {
+				out = append(out, PRAdvisory{Package: GoStdlib, Version: from, ID: adv.ID, Summary: adv.Summary, Severity: adv.Severity})
+			}
+		}
+
+		return out
+	}
+
+	t.Removes = diff(was, now)
+	t.Adds = diff(now, was)
+
+	for i := range t.Adds {
+		t.Adds[i].Version = to
+	}
+
+	const caveat = " (Go standard library, compiled into what the builder stage builds; whether the code reaches it isn't checked)"
+
+	switch {
+	case len(t.Adds) > 0:
+		t.Class = PRAddsAdvisory
+		t.Reason = fmt.Sprintf("Go %s has %s Go %s didn't%s", to, plural(len(t.Adds), "advisory"), from, caveat)
+	case len(t.Removes) > 0:
+		t.Class = PRFixesShipped
+		t.Reason = fmt.Sprintf("Go %s → %s removes %s: %s%s", from, to, plural(len(t.Removes), "advisory"), describeRemoved(t.Removes, false), caveat)
+	default:
+		t.Class = PRFixesNothing
+		t.Reason = fmt.Sprintf("Go %s → %s removes no known standard library advisory (the image's OS packages aren't checked)", from, to)
+	}
+
+	return true
 }
 
 // majorChanges lists the packages whose installed major version differs between two locks
