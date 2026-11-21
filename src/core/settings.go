@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -67,32 +68,49 @@ func CheckDependabotSettings(gh *GitHub, repo, dir string) (*DependabotSettings,
 	s := &DependabotSettings{}
 	api := fmt.Sprintf("%s/repos/%s", gh.BaseURL, repo)
 
-	// 204 when enabled, 404 when not.
+	// 204 when enabled, 404 when not; 403 when the token can't see settings at all.
 	code, err := gh.status(api + "/vulnerability-alerts")
-	if err != nil {
-		return nil, err
-	}
 
-	s.add(SettingCheck{
-		OK: code == http.StatusNoContent, Check: "Dependabot alerts",
-		Problem: "disabled - nothing reports vulnerable dependencies",
-		Fix:     "gh api -X PUT repos/" + repo + "/vulnerability-alerts",
-	})
+	switch {
+	case code == http.StatusForbidden:
+		s.add(SettingCheck{
+			Unknown: true, Check: "Dependabot alerts",
+			Problem: "couldn't be read - the token lacks permission for the repository's vulnerability alerts setting",
+			Fix:     "give the token Dependabot alerts (read) access",
+		})
+	case err != nil:
+		return nil, err
+	default:
+		s.add(SettingCheck{
+			OK: code == http.StatusNoContent, Check: "Dependabot alerts",
+			Problem: "disabled - nothing reports vulnerable dependencies",
+			Fix:     "gh api -X PUT repos/" + repo + "/vulnerability-alerts",
+		})
+	}
 
 	var fixes struct {
 		Enabled bool `json:"enabled"`
 		Paused  bool `json:"paused"`
 	}
 
-	if err := gh.getJSON(api+"/automated-security-fixes", &fixes); err != nil {
-		return nil, err
-	}
+	var httpErr *HTTPError
 
-	s.add(SettingCheck{
-		OK: fixes.Enabled && !fixes.Paused, Check: "Dependabot security updates",
-		Problem: "disabled - alerts that matter get no fix PR",
-		Fix:     "gh api -X PUT repos/" + repo + "/automated-security-fixes",
-	})
+	switch err := gh.getJSON(api+"/automated-security-fixes", &fixes); {
+	case errors.As(err, &httpErr) && httpErr.Status == http.StatusForbidden:
+		s.add(SettingCheck{
+			Unknown: true, Check: "Dependabot security updates",
+			Problem: "couldn't be read - the token lacks permission for the repository's security updates setting",
+			Fix:     "give the token administration (read) access",
+		})
+	case err != nil:
+		return nil, err
+	default:
+		s.add(SettingCheck{
+			OK: fixes.Enabled && !fixes.Paused, Check: "Dependabot security updates",
+			Problem: "disabled - alerts that matter get no fix PR",
+			Fix:     "gh api -X PUT repos/" + repo + "/automated-security-fixes",
+		})
+	}
 
 	s.checkSecurityAndAnalysis(gh, api, repo)
 

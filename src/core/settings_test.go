@@ -279,3 +279,43 @@ func TestCheckRuns(t *testing.T) {
 		})
 	}
 }
+
+// A token without Dependabot-alerts permission gets 403 from the settings endpoints; that is
+// "can't tell", not a reason to abandon the whole run.
+func TestCheckDependabotSettingsForbidden(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/o/r/vulnerability-alerts", "/repos/o/r/automated-security-fixes":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"message":"Resource not accessible by personal access token"}`))
+		case "/repos/o/r/pulls", "/repos/o/r/dependabot/alerts":
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	s, err := CheckDependabotSettings(&GitHub{BaseURL: server.URL, Client: server.Client()}, "o/r", t.TempDir())
+	if err != nil {
+		t.Fatalf("a 403 on the settings endpoints should not be fatal: %v", err)
+	}
+
+	for _, name := range []string{"Dependabot alerts", "Dependabot security updates"} {
+		found := false
+
+		for _, c := range s.Checks {
+			if c.Check == name {
+				found = true
+
+				if c.OK || !c.Unknown {
+					t.Errorf("%s should be unknown, got %+v", name, c)
+				}
+			}
+		}
+
+		if !found {
+			t.Errorf("no %s check", name)
+		}
+	}
+}
