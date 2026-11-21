@@ -71,4 +71,4 @@ jobs:
       - name: Run picard on itself
         uses: ./
         with:
-          version: ${{ github.sha }}
+          version: ${{ github.event.pull_request.head.sha || github.sha }}
