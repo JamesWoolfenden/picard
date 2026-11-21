@@ -159,7 +159,9 @@ func main() {
 					// Dependabot states has nothing to say about them.
 					var scorecard *core.ScorecardPlan
 
-					if c.String("state") == "open" {
+					if c.String("state") != "open" {
+						scorecard = &core.ScorecardPlan{Note: "--state " + c.String("state") + " replays past Dependabot alerts, and Scorecard alerts are read open only"}
+					} else {
 						if scorecard, err = core.PlanScorecard(gh, core.DependabotOptions{
 							Repo: repo, Directory: opts.Directory, Scan: opts, LockFile: c.String("lock"),
 						}); err != nil {
