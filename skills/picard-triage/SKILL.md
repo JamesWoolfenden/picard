@@ -35,8 +35,10 @@ preconditions here. That's this skill's job, and then acting on the result with 
   claim about the build, not about picard's verdict - a bundled app ships its devDependencies.
   Say what was checked and by what (picard's `not-shipped`, a call graph, the lock chain), and
   where picard's verdict could be wrong for this kind of project, say so instead of asserting it.
-- **Pinning isn't this skill's job** - an unpinned manifest is ghat's (`ghat audit`, and
-  JamesWoolfenden/ghat#32 for requirements files). Point at it; don't pin here.
+- **Pinning of manifests isn't this skill's job** - an unpinned Actions/Docker/pre-commit/Terraform
+  reference is ghat's (`ghat all`; `ghat audit` scores, it doesn't pin; JamesWoolfenden/ghat#32 for
+  requirements files). Point at it; don't pin here. The exception is tool installs in shell scripts,
+  which no ghat pinner covers - see step h3.
 
 ---
 
@@ -316,8 +318,13 @@ Group them rather than listing every line:
   GO-/GHSA- ids); Scorecard counts advisories that aren't shipped. Same handling as any
   other alert: upgrade if a release fixes it (not a pseudo-version, unless the user wants it),
   otherwise dismiss with picard's reason, on the user's say.
-- **`PinnedDependenciesID`** - ghat's job; point at `ghat audit`, don't pin here (`go install ...@latest`
-  and `curl | sh` in scripts count).
+- **`PinnedDependenciesID`** - read each alert's `location.path` first (`gh api .../code-scanning/alerts/<n>`),
+  because the right tool depends on what it flags. Actions `uses:`, Dockerfile `FROM`, pre-commit hooks and
+  Terraform modules are ghat's (`ghat all`, or `swot`/`dock`; `ghat audit` only *scores* dependencies and
+  pins nothing) - point at it, don't pin here. Shell scripts (`go install ...@latest`, `curl | sh`,
+  Scorecard's `goCommand`/`downloadThenRun`) are **not** covered by any ghat pinner: it's a manual edit
+  (pin each tool to a version from `go list -m <module>@latest`, replace `curl | sh` with a pinned
+  `go install` or a checksummed download). Propose it as a plan item and confirm before committing.
 - **Process rules** (`CodeReviewID`, `FuzzingID`, `CIIBestPracticesID`, `SecurityPolicyID`, ...) -
   not dependency facts. Report as a one-line each; `SecurityPolicyID` is a quick `SECURITY.md` fix.
 - Anything else (CodeQL findings) is code review, not triage: list and hand to `/code-review`.
