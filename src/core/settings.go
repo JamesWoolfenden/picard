@@ -336,7 +336,7 @@ func (s *DependabotSettings) checkSecurityAndAnalysis(gh *GitHub, api, repo stri
 		s.add(SettingCheck{
 			Unknown: true, Check: "Malware alerts",
 			Problem: "the API doesn't say whether they're on (no malware field in security_and_analysis); " +
-				"the Dependabot page shows \"Malware alerts are disabled\" when off",
+				"the Dependabot page shows \"Malware alerts are disabled\" when off, and nothing when the feature isn't offered for the repo",
 			Fix: gitHubHost(gh) + "/" + repo + "/settings/security_analysis - enable Malware alerts if off",
 		})
 	} else {
@@ -352,6 +352,19 @@ func (s *DependabotSettings) checkSecurityAndAnalysis(gh *GitHub, api, repo stri
 		{"secret_scanning_validity_checks", "Secret scanning validity checks"},
 	} {
 		if v, ok := r.SecurityAndAnalysis[c.key]; ok && v.Status != "enabled" {
+			// GitHub accepts the PATCH for validity checks yet leaves it disabled on repos where the
+			// feature isn't offered (no toggle in Settings), so a failing "fix" there is misleading.
+			if c.key == "secret_scanning_validity_checks" {
+				s.add(SettingCheck{
+					Unknown: true, Check: c.check,
+					Problem: "disabled - only enable it if Settings → Advanced Security offers a toggle; " +
+						"the API silently ignores the change on repos where it isn't available",
+					Fix: gitHubHost(gh) + "/" + repo + "/settings/security_analysis",
+				})
+
+				continue
+			}
+
 			s.add(SettingCheck{
 				Check: c.check, Problem: "disabled",
 				Fix: "gh api -X PATCH repos/" + repo + " -f security_and_analysis[" + c.key + "][status]=enabled",
