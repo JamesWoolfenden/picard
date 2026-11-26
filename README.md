@@ -158,8 +158,9 @@ On a GitLab project - gitlab.com or self-managed, from the origin remote or
 `--repo https://host/group/project` - `picard dependabot` checks the GitLab equivalent instead:
 whether dependency scanning is licensed on the instance (it needs Ultimate) and ran in the
 default branch's latest pipeline, with the `.gitlab-ci.yml` include that turns it on, plus the
-count of open findings by severity. It authenticates with `GITLAB_TOKEN` or the token
-`glab auth login --hostname <host>` stored. Reading and dismissing GitLab's findings isn't
+count of open findings by severity. It authenticates with `GITLAB_TOKEN` (sent only to gitlab.com, or to the
+self-managed host named in `GITLAB_HOST`, never to a host merely read from the origin remote) or
+the token `glab auth login --hostname <host>` stored. Reading and dismissing GitLab's findings isn't
 supported yet, so `--apply`, `--prs` and `--lock` are refused there; `picard scan` gives the
 verdicts.
 

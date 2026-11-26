@@ -20,10 +20,29 @@ type GitLab struct {
 	Client  *http.Client
 }
 
-// NewGitLab authenticates with GITLAB_TOKEN, else the token glab has stored for the host
-// (`glab auth login --hostname <host>`). The setup check needs read_api.
+// tokenHostTrusted reports whether GITLAB_TOKEN may be sent to host: gitlab.com, or the host
+// the user named in GITLAB_HOST. The host comes from a checkout's origin remote, which is
+// untrusted input, so the environment token must not follow it anywhere else.
+func tokenHostTrusted(host string) bool {
+	host = strings.ToLower(host)
+	if host == "gitlab.com" {
+		return true
+	}
+
+	named := strings.ToLower(strings.TrimSpace(os.Getenv("GITLAB_HOST")))
+	named = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(named, "https://"), "http://"), "/")
+
+	return named != "" && host == named
+}
+
+// NewGitLab authenticates with GITLAB_TOKEN (only for gitlab.com or the GITLAB_HOST named
+// host), else the token glab has stored for the host (`glab auth login --hostname <host>`).
+// The setup check needs read_api.
 func NewGitLab(host string) (*GitLab, error) {
-	token := os.Getenv("GITLAB_TOKEN")
+	token := ""
+	if tokenHostTrusted(host) {
+		token = os.Getenv("GITLAB_TOKEN")
+	}
 
 	if token == "" {
 		out, err := exec.Command("glab", "config", "get", "token", "--host", host).Output()
@@ -33,7 +52,7 @@ func NewGitLab(host string) (*GitLab, error) {
 	}
 
 	if token == "" {
-		return nil, fmt.Errorf("no GitLab token for %s: set GITLAB_TOKEN or log in with `glab auth login --hostname %s`", host, host)
+		return nil, fmt.Errorf("no GitLab token for %s: set GITLAB_TOKEN (sent only to gitlab.com or the host named in GITLAB_HOST) or log in with `glab auth login --hostname %s`", host, host)
 	}
 
 	return &GitLab{BaseURL: "https://" + host, Token: token, Client: &http.Client{Timeout: 30 * time.Second}}, nil

@@ -35,6 +35,22 @@ var goPlatforms = [][3]string{
 	{"darwin", "arm64", "1"}, {"windows", "amd64", "1"},
 }
 
+// goListCmd is `go list -deps` for one platform, run in the scanned directory. That
+// directory is untrusted, so the command is pinned: -mod=readonly on the command line beats
+// any GOFLAGS, and later env entries beat the ambient ones.
+func goListCmd(dir string, p [3]string) *exec.Cmd {
+	cmd := exec.Command("go", "list", "-mod=readonly", "-deps", "-f", "{{.ImportPath}} {{with .Module}}{{.Path}}{{end}}", "./...")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GOOS="+p[0], "GOARCH="+p[1], "CGO_ENABLED="+p[2],
+		"GOWORK=off", // ignore a go.work in or above the checkout
+		// GOTOOLCHAIN is left alone: pinning it to local makes go list fail on every repo
+		// that needs a newer Go than the installed one, which is common.
+	)
+
+	return cmd
+}
+
 // goListDeps lists what the non-test build compiles in across goPlatforms - modules and
 // import paths - or an error when the go command can't tell. A variable so tests can stand
 // in for it.
@@ -54,11 +70,7 @@ var goListDeps = func(dir string) (modules, packages []string, err error) {
 		go func() {
 			defer wg.Done()
 
-			cmd := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}} {{with .Module}}{{.Path}}{{end}}", "./...")
-			cmd.Dir = dir
-			cmd.Env = append(os.Environ(), "GOOS="+p[0], "GOARCH="+p[1], "CGO_ENABLED="+p[2])
-
-			out, err := cmd.Output()
+			out, err := goListCmd(dir, p).Output()
 			results[i] = result{out, err}
 		}()
 	}
