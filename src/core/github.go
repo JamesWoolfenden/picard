@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -106,11 +107,34 @@ func getAll[T any](g *GitHub, url string) ([]T, error) {
 
 		url = ""
 		if m := nextLinkRe.FindStringSubmatch(resp.Header.Get("Link")); m != nil {
+			if err := sameOrigin(g.BaseURL, m[1]); err != nil {
+				return nil, err
+			}
+
 			url = m[1]
 		}
 	}
 
 	return all, nil
+}
+
+// sameOrigin refuses a pagination link that leaves the API host, so the token isn't sent elsewhere.
+func sameOrigin(base, next string) error {
+	b, err := neturl.Parse(base)
+	if err != nil {
+		return err
+	}
+
+	n, err := neturl.Parse(next)
+	if err != nil {
+		return fmt.Errorf("bad pagination link %q: %w", next, err)
+	}
+
+	if !strings.EqualFold(n.Scheme, b.Scheme) || !strings.EqualFold(n.Host, b.Host) {
+		return fmt.Errorf("pagination link %q leaves %s; not following it with the token", next, b.Host)
+	}
+
+	return nil
 }
 
 // Dismiss closes an alert with one of Dependabot's reasons (fix_started, inaccurate,
